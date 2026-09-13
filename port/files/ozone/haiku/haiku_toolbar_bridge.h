@@ -7,7 +7,7 @@
 
 #include <string>
 
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 // The narrow seam between content_shell's Haiku delegate and the ozone Haiku
 // window, so the delegate never has to include an ozone platform-internal
@@ -25,6 +25,8 @@ class HaikuToolbarObserver {
   virtual void OnNavigateForward() = 0;
   virtual void OnReloadOrStop() = 0;
   virtual void OnNavigateToURL(const std::string& text) = 0;
+  virtual void OnAddBookmark() = 0;
+  virtual void OnShowBookmarks() = 0;
 
  protected:
   ~HaikuToolbarObserver() = default;
@@ -43,6 +45,9 @@ void HaikuToolbarSetLoading(gfx::AcceleratedWidget widget, bool loading);
 void HaikuToolbarSetNavigationEnabled(gfx::AcceleratedWidget widget,
                                       bool back,
                                       bool forward);
+// Opens the bookmarks window with `tsv` (see NativeWindow::ShowBookmarksWindow).
+void HaikuToolbarShowBookmarks(gfx::AcceleratedWidget widget,
+                               const std::string& tsv);
 
 // Called by HaikuWindow (on the UI thread) to reach the registered observer.
 // Returns null if none is registered for the widget.

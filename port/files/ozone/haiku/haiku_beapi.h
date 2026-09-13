@@ -65,6 +65,8 @@ class HaikuEventBridge : public haiku_shim::Delegate {
   void OnNavigateForward() override;
   void OnReloadOrStop() override;
   void OnNavigateToURL(const char* utf8) override;
+  void OnAddBookmark() override;
+  void OnShowBookmarks() override;
 
  private:
   base::WeakPtr<HaikuWindow> window_;

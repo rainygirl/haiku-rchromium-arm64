@@ -252,4 +252,14 @@ void HaikuEventBridge::OnNavigateToURL(const char* utf8) {
                                 std::move(text)));
 }
 
+void HaikuEventBridge::OnAddBookmark() {
+  ui_task_runner_->PostTask(
+      FROM_HERE, base::BindOnce(&HaikuWindow::OnToolbarAddBookmark, window_));
+}
+
+void HaikuEventBridge::OnShowBookmarks() {
+  ui_task_runner_->PostTask(
+      FROM_HERE, base::BindOnce(&HaikuWindow::OnToolbarShowBookmarks, window_));
+}
+
 }  // namespace ui

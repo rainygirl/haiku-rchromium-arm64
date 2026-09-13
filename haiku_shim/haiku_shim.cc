@@ -18,6 +18,11 @@
 #include <Button.h>
 #include <TextControl.h>
 #include <InterfaceDefs.h>
+#include <ListView.h>
+#include <ScrollView.h>
+#include <StringItem.h>
+#include <string>
+#include <vector>
 
 namespace haiku_shim {
 
@@ -35,7 +40,30 @@ enum {
   kMsgForward = 'fwrd',
   kMsgReloadOrStop = 'rlod',
   kMsgGo = 'entr',
+  kMsgAddBookmark = 'badd',
+  kMsgShowBookmarks = 'bshw',
+  kMsgBookmarkChosen = 'bsel',
+  kMsgBookmarkFilter = 'bflt',
 };
+
+struct BookmarkEntry {
+  std::string url;
+  std::string title;
+  std::string date;
+};
+
+// Lowercased substring test, for the filter.
+bool MatchesFilter(const BookmarkEntry& e, const std::string& needle) {
+  if (needle.empty())
+    return true;
+  std::string hay = e.url + " " + e.title + " " + e.date;
+  for (char& c : hay)
+    c = (char)tolower((unsigned char)c);
+  std::string n = needle;
+  for (char& c : n)
+    c = (char)tolower((unsigned char)c);
+  return hay.find(n) != std::string::npos;
+}
 
 sem_id g_app_ready = -1;
 bool g_app_started = false;
@@ -124,6 +152,89 @@ class ShimView : public BView {
   BBitmap* bitmap_;
 };
 
+// The searchable, date-grouped bookmarks window. Runs on its own looper; on
+// choosing an entry it calls the delegate, which posts to Chromium's UI thread.
+class BookmarksWindow : public BWindow {
+ public:
+  BookmarksWindow(BRect frame, Delegate* delegate,
+                  const std::vector<BookmarkEntry>& entries)
+      : BWindow(frame, "Bookmarks", B_TITLED_WINDOW,
+                B_ASYNCHRONOUS_CONTROLS | B_QUIT_ON_WINDOW_CLOSE),
+        delegate_(delegate),
+        all_(entries) {
+    BRect b = Bounds();
+    filter_ = new BTextControl(BRect(8, 8, b.right - 8, 30), "filter", NULL, "",
+                               new BMessage(kMsgBookmarkFilter));
+    filter_->SetDivider(0);
+    filter_->SetModificationMessage(new BMessage(kMsgBookmarkFilter));
+    filter_->SetResizingMode(B_FOLLOW_LEFT_RIGHT | B_FOLLOW_TOP);
+    AddChild(filter_);
+
+    BRect lr(8, 38, b.right - 8 - B_V_SCROLL_BAR_WIDTH, b.bottom - 8);
+    list_ = new BListView(lr, "list", B_SINGLE_SELECTION_LIST,
+                          B_FOLLOW_ALL_SIDES);
+    list_->SetInvocationMessage(new BMessage(kMsgBookmarkChosen));
+    BScrollView* scroll =
+        new BScrollView("scroll", list_, B_FOLLOW_ALL_SIDES, 0, false, true);
+    AddChild(scroll);
+
+    filter_->SetTarget(this);
+    list_->SetTarget(this);
+    Rebuild("");
+    Run();
+  }
+
+  void MessageReceived(BMessage* what) {
+    switch (what->what) {
+      case kMsgBookmarkFilter:
+        Rebuild(filter_->Text());
+        break;
+      case kMsgBookmarkChosen: {
+        int32 i = list_->CurrentSelection();
+        if (i >= 0 && i < (int32)shown_.size() && !shown_[i].url.empty()) {
+          delegate_->OnNavigateToURL(shown_[i].url.c_str());
+          PostMessage(B_QUIT_REQUESTED);
+        }
+        break;
+      }
+      default:
+        BWindow::MessageReceived(what);
+    }
+  }
+
+ private:
+  // Rebuilds the visible list for `needle`, newest date first, with a header
+  // item per date.
+  void Rebuild(const std::string& needle) {
+    for (int32 i = list_->CountItems() - 1; i >= 0; --i)
+      delete list_->RemoveItem(i);
+    shown_.clear();
+
+    std::string current_date;
+    // all_ is expected newest-first; keep that order and break on date change.
+    for (const BookmarkEntry& e : all_) {
+      if (!MatchesFilter(e, needle))
+        continue;
+      if (e.date != current_date) {
+        current_date = e.date;
+        BStringItem* h = new BStringItem(("  " + current_date).c_str());
+        list_->AddItem(h);
+        shown_.push_back(BookmarkEntry());  // placeholder so indices line up
+      }
+      std::string label = "    " + (e.title.empty() ? e.url : e.title);
+      list_->AddItem(new BStringItem(label.c_str()));
+      shown_.push_back(e);
+    }
+  }
+
+  Delegate* delegate_;
+  std::vector<BookmarkEntry> all_;
+  std::vector<BookmarkEntry> shown_;  // parallel to list items; date headers
+                                      // have an empty url so a click is ignored.
+  BTextControl* filter_;
+  BListView* list_;
+};
+
 class ShimWindow : public BWindow, public NativeWindow {
  public:
   ShimWindow(BRect frame, bool has_frame, bool with_toolbar, Delegate* delegate)
@@ -184,6 +295,12 @@ class ShimWindow : public BWindow, public NativeWindow {
         break;
       case kMsgGo:
         delegate_->OnNavigateToURL(address_ != NULL ? address_->Text() : "");
+        break;
+      case kMsgAddBookmark:
+        delegate_->OnAddBookmark();
+        break;
+      case kMsgShowBookmarks:
+        delegate_->OnShowBookmarks();
         break;
       default:
         BWindow::MessageReceived(what);
@@ -294,7 +411,7 @@ class ShimWindow : public BWindow, public NativeWindow {
       return;
     }
     // Icon-only art comes later; for now the label carries Reload vs Stop.
-    reload_->SetLabel(loading ? "x" : "R");
+    reload_->SetLabel(loading ? "✕" : "↻");
     UnlockLooper();
   }
 
@@ -312,6 +429,39 @@ class ShimWindow : public BWindow, public NativeWindow {
       forward_->SetEnabled(forward);
     }
     UnlockLooper();
+  }
+
+  void ShowBookmarksWindow(const char* tsv) {
+    std::vector<BookmarkEntry> entries;
+    std::string data(tsv != NULL ? tsv : "");
+    size_t pos = 0;
+    while (pos < data.size()) {
+      size_t nl = data.find('\n', pos);
+      std::string line = data.substr(pos, nl == std::string::npos ? std::string::npos : nl - pos);
+      pos = (nl == std::string::npos) ? data.size() : nl + 1;
+      if (line.empty())
+        continue;
+      size_t t1 = line.find('\t');
+      size_t t2 = t1 == std::string::npos ? std::string::npos : line.find('\t', t1 + 1);
+      BookmarkEntry e;
+      if (t1 == std::string::npos) {
+        e.url = line;
+      } else if (t2 == std::string::npos) {
+        e.url = line.substr(0, t1);
+        e.title = line.substr(t1 + 1);
+      } else {
+        e.url = line.substr(0, t1);
+        e.title = line.substr(t1 + 1, t2 - t1 - 1);
+        e.date = line.substr(t2 + 1);
+      }
+      entries.push_back(e);
+    }
+    // Owns itself: B_QUIT_ON_WINDOW_CLOSE frees it when the user closes it.
+    BScreen screen(B_MAIN_SCREEN_ID);
+    BRect sf = screen.Frame();
+    BRect f(0, 0, 420, 460);
+    f.OffsetTo((sf.Width() - f.Width()) / 2, (sf.Height() - f.Height()) / 2);
+    new BookmarksWindow(f, delegate_, entries);
   }
 
   void DestroyWindow() {
@@ -333,14 +483,20 @@ class ShimWindow : public BWindow, public NativeWindow {
     float x = 4;
     const float bw = 30;
     const float bh = kToolbarHeight - 6;
-    back_ = new BButton(BRect(x, 3, x + bw, 3 + bh), "back", "<",
+    back_ = new BButton(BRect(x, 3, x + bw, 3 + bh), "back", "◀",
                         new BMessage(kMsgBack));
     x += bw + 4;
-    forward_ = new BButton(BRect(x, 3, x + bw, 3 + bh), "forward", ">",
+    forward_ = new BButton(BRect(x, 3, x + bw, 3 + bh), "forward", "▶",
                            new BMessage(kMsgForward));
     x += bw + 4;
-    reload_ = new BButton(BRect(x, 3, x + bw, 3 + bh), "reload", "R",
+    reload_ = new BButton(BRect(x, 3, x + bw, 3 + bh), "reload", "↻",
                           new BMessage(kMsgReloadOrStop));
+    x += bw + 4;
+    add_bookmark_ = new BButton(BRect(x, 3, x + bw, 3 + bh), "addbm", "☆",
+                                new BMessage(kMsgAddBookmark));
+    x += bw + 4;
+    show_bookmarks_ = new BButton(BRect(x, 3, x + bw, 3 + bh), "showbm", "≡",
+                                  new BMessage(kMsgShowBookmarks));
     x += bw + 8;
     address_ = new BTextControl(BRect(x, 4, width - 8, 3 + bh), "address", NULL,
                                 "", new BMessage(kMsgGo));
@@ -350,12 +506,16 @@ class ShimWindow : public BWindow, public NativeWindow {
     toolbar_->AddChild(back_);
     toolbar_->AddChild(forward_);
     toolbar_->AddChild(reload_);
+    toolbar_->AddChild(add_bookmark_);
+    toolbar_->AddChild(show_bookmarks_);
     toolbar_->AddChild(address_);
 
     // Deliver the controls' messages to this window, whatever thread built it.
     back_->SetTarget(this);
     forward_->SetTarget(this);
     reload_->SetTarget(this);
+    add_bookmark_->SetTarget(this);
+    show_bookmarks_->SetTarget(this);
     address_->SetTarget(this);
   }
 
@@ -367,6 +527,8 @@ class ShimWindow : public BWindow, public NativeWindow {
   BButton* back_ = NULL;
   BButton* forward_ = NULL;
   BButton* reload_ = NULL;
+  BButton* add_bookmark_ = NULL;
+  BButton* show_bookmarks_ = NULL;
   BTextControl* address_ = NULL;
 };
 

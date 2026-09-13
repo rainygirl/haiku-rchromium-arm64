@@ -94,3 +94,34 @@ make re-navigation an acceptance test from the start, not an afterthought:
   across navigations.
 
 Catching this on arm64 first means the x86 backport does not meet it twice.
+
+### Root cause (found on x86, 2026-09-13)
+
+The x86 session traced it with stackwalk.c, catching the renderer main thread
+right after a re-navigation:
+
+    StorageController::ResetStorageAreaAndNamespaceConnections
+     -> StorageNamespace::ResetStorageAreaAndNamespaceConnections
+      -> CachedStorageArea::ResetConnection -> EnsureLoaded
+       -> StorageAreaProxy::GetAll            (synchronous mojo call)
+        -> InterfaceEndpointClient::SyncWatch -> WaitableEvent::WaitMany
+         -> ConditionVariable::Wait           (blocks forever)
+
+Navigation resets the storage connections (OnStorageServiceDisconnected ->
+RecoverFromStorageServiceCrash -> ResetStorageAreaAndNamespaceConnections) and
+the renderer re-reads its localStorage area with a *synchronous* GetAll that
+never returns. There is no dedicated storage thread here: RunInProcessStorage-
+Service runs on a base::ThreadPool sequence, and on 2 cores the renderer main
+thread blocks waiting for a storage sequence that never gets scheduled (the
+ThreadPool workers are busy with NetworkService etc.). naver uses localStorage
+heavily and reproduces it; light google news passes -- matching the symptom.
+
+This is separate from the initial-load stall (fixed with
+--disable-gpu-compositing) and the frame-delete race (x86 patch 0086). Fixing
+it means making that storage read non-blocking, or guaranteeing the in-process
+storage sequence runs ahead of the blocked renderer -- neither trivial.
+
+**Chromium 154 may have made these storage interfaces more asynchronous, so it
+may not reproduce here.** If arm64's naver<->google re-navigation paints every
+time, the bug is x86-specific and only needs attention during the backport.
+Source: rchromium-native-9c (x86 session).

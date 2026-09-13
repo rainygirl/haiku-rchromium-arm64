@@ -16,7 +16,15 @@
 #include <memory>
 #include <string>
 
+#include "base/base_paths.h"
+#include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/path_service.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/string_split.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/shell/browser/shell.h"
@@ -36,7 +44,8 @@ namespace {
 // ozone bridge) and turns them into Shell navigation.
 class ShellToolbarObserver : public ui::HaikuToolbarObserver {
  public:
-  explicit ShellToolbarObserver(Shell* shell) : shell_(shell) {}
+  ShellToolbarObserver(Shell* shell, gfx::AcceleratedWidget widget)
+      : shell_(shell), widget_(widget) {}
 
   void OnNavigateBack() override { shell_->GoBackOrForward(-1); }
   void OnNavigateForward() override { shell_->GoBackOrForward(1); }
@@ -63,8 +72,54 @@ class ShellToolbarObserver : public ui::HaikuToolbarObserver {
     }
   }
 
+  void OnAddBookmark() override {
+    if (!shell_->web_contents())
+      return;
+    const GURL url = shell_->web_contents()->GetLastCommittedURL();
+    if (!url.is_valid())
+      return;
+    std::string title = base::UTF16ToUTF8(shell_->web_contents()->GetTitle());
+    // The store is one tab-separated line per entry, so strip separators.
+    for (char& c : title)
+      if (c == '\t' || c == '\n' || c == '\r')
+        c = ' ';
+
+    base::Time::Exploded now;
+    base::Time::Now().LocalExplode(&now);
+    std::string line = base::StringPrintf("%s\t%s\t%04d-%02d-%02d\n",
+                                          url.spec().c_str(), title.c_str(),
+                                          now.year, now.month, now.day_of_month);
+    base::FilePath path = BookmarksPath();
+    if (!path.empty())
+      base::AppendToFile(path, line);
+  }
+
+  void OnShowBookmarks() override {
+    std::string data;
+    base::FilePath path = BookmarksPath();
+    if (!path.empty())
+      base::ReadFileToString(path, &data);
+    // Newest first: reverse the stored (append-order) lines.
+    std::vector<std::string> lines = base::SplitString(
+        data, "\n", base::TRIM_WHITESPACE, base::SPLIT_HANDLE_EMPTY);
+    std::string tsv;
+    for (auto it = lines.rbegin(); it != lines.rend(); ++it) {
+      if (!it->empty())
+        tsv += *it + "\n";
+    }
+    ui::HaikuToolbarShowBookmarks(widget_, tsv);
+  }
+
  private:
+  static base::FilePath BookmarksPath() {
+    base::FilePath home;
+    if (!base::PathService::Get(base::DIR_HOME, &home))
+      return base::FilePath();
+    return home.Append(".rchromium-bookmarks.tsv");
+  }
+
   raw_ptr<Shell> shell_;
+  gfx::AcceleratedWidget widget_;
 };
 
 }  // namespace
@@ -106,7 +161,8 @@ void ShellPlatformDelegate::CreatePlatformWindow(
   aura::WindowTreeHost* host = platform_->aura->host();
   shell_data.window = host->window();
   shell_data.widget = host->GetAcceleratedWidget();
-  shell_data.toolbar_observer = std::make_unique<ShellToolbarObserver>(shell);
+  shell_data.toolbar_observer =
+      std::make_unique<ShellToolbarObserver>(shell, shell_data.widget);
   ui::SetHaikuToolbarObserver(shell_data.widget,
                               shell_data.toolbar_observer.get());
 }
