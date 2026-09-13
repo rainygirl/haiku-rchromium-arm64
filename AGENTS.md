@@ -147,6 +147,23 @@ image, which are driven from other sessions.
 6. **Re-run a clean-checkout build** after the reconciliation above and record
    the exact `gn gen`/`ninja` invocation and revision that reproduces the binary.
 
+## The x86 sibling already has its own native toolbar
+
+`../rchromium-native-x86/` is NOT a backport target: it independently grew an
+equivalent native toolbar (Chromium 87), implemented with BControlLook-drawn
+buttons (`chromium87_overlay/ozone/haiku_beapi_views.cc`, `haiku_browser_chrome.h`)
+plus the aura ShellPlatformDelegate. Both platforms meet the same user spec
+(icon toolbar + address field + date-grouped searchable bookmarks + blue-icon
+Desktop install) and share the same design concepts -- a widget-keyed bridge so
+content_shell never sees a BeAPI type, an explicit platform_->aura->ShowWindow()
+in the delegate, and the SetAddressBarURL/SetIsLoading/EnableUIControl mapping.
+
+They differ only in how the toolbar is drawn (this port: stock BButton via the
+shim; x86: custom BControlLook drawing) and cannot share source across the 87 vs
+154 API gap. Whether to converge the two on one style is an open user decision;
+until it is made, neither is a port of the other. Do not rewrite one to match
+the other without that decision.
+
 ## Relationship to renku-arm64, and deployment
 
 This repository is the **canonical source** for the arm64 Chromium port. The
