@@ -21,6 +21,25 @@ ways, and re-navigation (including Back to a previously loaded page) repaints
 cleanly -- the x86 localStorage re-navigation stall does not reproduce on 154
 for these pages. Single window, no in-content views toolbar.
 
+The toolbar was then converged on the x86 port's BControlLook style (user
+decision (b), 2026-09-13): the stock BButton toolbar was replaced by the ported
+ChromeButton/BrowserChromeView/BookmarkStore/BOutlineListView design, so the
+look, the bookmark behaviour and the on-disk format now match
+`../rchromium-native-x86/`. Verified on screen: the BControlLook toolbar
+renders, and the star button files about:blank under a "Today" group in the
+searchable bookmarks window.
+
+**Known separate issue -- heavy pages fault in V8.** With this build, about:blank
+renders under the toolbar, but loading google.com aborts with a V8 CHECK
+(`std::numeric_limits<int>::max() >= length_`) / BUS_ADRALN. Free RAM is ample
+(6 GB), so this is not exhaustion; it is the same V8-CodeRange-not-backed fault
+the x86 port fixed with MAP_NORESERVE (x86 patch 0085) -- Haiku has no
+overcommit, so V8's PROT_NONE reservations are charged in full and an mprotect
+of a code page can fail. arm64 needs the equivalent of that patch (and, per the
+x86 notes, results are only reliable on a freshly booted machine). This is
+independent of the toolbar work. An earlier arm64 run did render google.com, so
+it is intermittent/commit-charge dependent, consistent with the x86 finding.
+
 Launch flags that work on the VM (software render, single process):
 `--ozone-platform=haiku --no-sandbox --single-process --disable-gpu
 --in-process-gpu --disable-gpu-compositing --user-data-dir=<writable>`; set
