@@ -478,3 +478,58 @@ Repro env (reusable): grafted TLSDESC image /tmp/nosstrace.iso on the M4 (boot
 via /tmp/cstest-launch.sh on port 2325), content_shell + 4 KB-relinked shim on
 csdata.img mounted at /boot/home/cs. The arm64 B-probe source is in the session
 scratchpad (btest.c) and cross-compiles with aarch64-unknown-haiku-gcc.
+
+### naver crash: ROOT CAUSE confirmed via instrumented rebuild + fix direction (2026-09-13, option 1)
+
+User authorized lifting the no-second-ninja rule for a targeted V8 instrumentation
+build. Results:
+
+INSTRUMENTED DUMP (built content_shell with a scan in ast-value-factory.cc
+GetString that dumps any string_table_ entry whose key pointer is null/misaligned):
+    V8DBG stomped entry: key=0x0 hash=0x7fffffff occ=1639 cap=4096
+        map=0x1c009cc000 entry=0x1c009cc000
+    V8DBG entry16: 00 00 00 00 00 00 00 00  ff ff ff ff ff ff ff ff
+    Received signal 11 SEGV_ACCERR 001c009cbfe0   (reading 0x20 before map base)
+Reading: the FIRST entry of the string table's backing (== the allocation base)
+is overwritten with {key = 0x0, hash_and_exists_ = 0xffffffff}. The exists bit
+(31) is set so it looks "occupied", but key is null -> Resize/Probe feeds a null
+key to AstRawString::Equal -> crash. The stomp pattern is 8 bytes 0x00 then 8
+bytes 0xFF (= {ptr=0, u64=0xffffffffffffffff}) -- a specific sentinel, not random
+heap junk. The page immediately before the backing is PROT_NONE (the -0x20 read
+faulted SEGV_ACCERR) -> the backing is the START of a PartitionAlloc slot span.
+So: a browser-side write puts {0, -1} at the start of a PA slot that happens to
+be the renderer's V8 string-table backing.
+
+MECHANISM confirmed by the three-way process test (both platforms):
+  - empty profile path + single-process = renders fine
+  - valid profile path + single-process = crash during heavy V8 work
+  - valid profile path + MULTI-process  = renderer passes V8, no stomp
+=> It is NOT a renderer/V8 internal defect. In single-process a browser-side
+subsystem shares the address space and stomps the renderer's V8 heap/zone;
+isolating the renderer into its own process removes the stomp.
+
+FIX EXPERIMENTS (arm64):
+  - off-the-record main context (ShellBrowserContext(true), shell_browser_main_parts.cc
+    :141) -- the x86 session's fix: makes the default storage partition in-memory,
+    so on-disk leveldb/disk_cache/etc. never start (verified: the profile dir gets
+    only DevToolsActivePort, no Code Cache/LocalStorage/blob_storage/DIPS). On arm64
+    this fixes example.com and a data: JS page (100k loop + DOM) -- so off-the-record
+    does NOT break JS -- but naver STILL crashes with the same parse stack. So on
+    arm64 the stomper is NOT the on-disk storage subsystem; it is an in-process
+    browser component active during heavy page load (in-memory storage service,
+    network service, or something that scales with the page).
+  - MULTI-process (drop --single-process): naver runs with NO V8 crash, NO
+    font_cache CHECK (arm64 has standard Haiku fonts in /boot/system/data/fonts/
+    {ttfonts,otfonts,psfonts}), only a benign webrtc cpu_info ERROR. This is the
+    working arm64 mitigation for the V8 stomp. (Visual render not confirmable on
+    renku-nossldev, which boots headless -- sshd but no app_server/desktop.)
+
+STATUS: root cause is a single-process browser-side write of {0,-1} into a PA slot
+holding the renderer's V8 string table. off-the-record is insufficient on arm64;
+multi-process avoids it. Remaining to fully fix: either (a) identify and fix the
+exact browser subsystem doing the stray write (needs writer-side instrumentation),
+or (b) ship content_shell multi-process (needs the renderer child-process launcher
+to be solid on Haiku; on arm64 it already runs naver without the font/V8 crashes).
+The x86 session is pursuing the same on its hardware (its 32-bit JSEntryTrampoline
+SIGILL under off-the-record is suspected fragmentation, since arm64 64-bit runs JS
+fine under off-the-record).
