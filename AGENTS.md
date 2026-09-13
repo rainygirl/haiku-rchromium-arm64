@@ -29,16 +29,20 @@ look, the bookmark behaviour and the on-disk format now match
 renders, and the star button files about:blank under a "Today" group in the
 searchable bookmarks window.
 
-**Known separate issue -- heavy pages fault in V8.** With this build, about:blank
-renders under the toolbar, but loading google.com aborts with a V8 CHECK
-(`std::numeric_limits<int>::max() >= length_`) / BUS_ADRALN. Free RAM is ample
-(6 GB), so this is not exhaustion; it is the same V8-CodeRange-not-backed fault
-the x86 port fixed with MAP_NORESERVE (x86 patch 0085) -- Haiku has no
-overcommit, so V8's PROT_NONE reservations are charged in full and an mprotect
-of a code page can fail. arm64 needs the equivalent of that patch (and, per the
-x86 notes, results are only reliable on a freshly booted machine). This is
-independent of the toolbar work. An earlier arm64 run did render google.com, so
-it is intermittent/commit-charge dependent, consistent with the x86 finding.
+**Known separate issue -- heavy pages fault in V8 on an aged session.** With
+this build, about:blank renders under the toolbar, but loading google.com aborts
+with a V8 CHECK (`std::numeric_limits<int>::max() >= length_`) / BUS_ADRALN.
+Free RAM is ample (6 GB), so this is not exhaustion. The MAP_NORESERVE fix that
+the x86 port carries as patch 0085 is ALREADY present in this 154 tree
+(page_allocator_internals_posix.h, `#if defined(__HAIKU__)` -> add MAP_NORESERVE
+to PROT_NONE reservations), so there is nothing to port. What remains is the
+residual, intermittent form the x86 notes describe: even with MAP_NORESERVE,
+reliable rendering of heavy pages needs a freshly booted machine -- accumulated
+commit charge and address-space fragmentation from many content_shell launches
+(this session ran a dozen-plus) eventually make a V8 CodeRange page unbacked.
+An earlier arm64 run this session did render google.com, consistent with the
+intermittence. This is independent of the toolbar; re-test heavy pages on a
+fresh VM boot rather than treating it as a toolbar or missing-patch bug.
 
 Launch flags that work on the VM (software render, single process):
 `--ozone-platform=haiku --no-sandbox --single-process --disable-gpu
