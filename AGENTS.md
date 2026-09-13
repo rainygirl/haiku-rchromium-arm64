@@ -421,3 +421,60 @@ NOTE on the ultimate fix: even once content_shell runs and --js-flags=
 --single-threaded confirms the hypothesis, the actual V8 fix needs a Chromium
 rebuild (a second ninja), which the port rules forbid in this state -- so the
 diagnostic is the deliverable here, and the fix itself is a follow-up build.
+
+### naver --single-threaded live test: DONE. Shim-load fixed, decisive results (2026-09-13, resolved)
+
+The live test ran to completion. Two loader blockers were fixed, then the
+decisive experiments were run.
+
+SHIM LOAD FIX (root-caused). libchromium_haiku.so failed
+`Troubles handling dynamic section`. Instrumented runtime_loader
+(FATAL->dprintf lands in the guest /var/log/syslog, not the app's stderr): the
+loop in parse_dynamic_segment read `d[0].d_tag==0` immediately, i.e.
+image->dynamic_ptr pointed at zeroed memory, so symhash stayed null. Cause: the
+shim is gcc-linked and uses ld's default arm64 `max-page-size=0x10000` (64 KB),
+which gives its RW LOAD segment a 0x10000 offset<->vaddr skew (LOAD offset
+0x215d8 / vaddr 0x315d8; DYNAMIC vaddr 0x32210). Haiku's arm64 runtime_loader
+mis-maps that layout so DYNAMIC's mapped address is wrong. clang-built
+content_shell/libtest use offset==vaddr and are fine. FIX: relink the shim at
+4 KB page alignment (matches Haiku arm64) --
+`aarch64-unknown-haiku-g++ -shared haiku_shim.o -Wl,-soname,libchromium_haiku.so
+-Wl,--hash-style=both -Wl,-z,max-page-size=0x1000 -lbe -lstdc++ -lroot`. With
+that, the shim loads and content_shell runs to the page. (This should be folded
+into the shim's real build.)
+
+DECISIVE RESULTS (content_shell running naver on the grafted TLSDESC image):
+- Baseline naver: crashes with the same V8 stack as csn2.log (AstRawString::Equal
+  <- TemplateHashMapImpl::Resize <- AstValueFactory::GetString <-
+  Parser::ParseOnBackground <- BackgroundCompileTask::Run). Repro confirmed.
+- `--js-flags=--single-threaded`: STILL crashes, identical stack -> NOT a
+  background-thread race / torn write.
+- Free RAM at crash ~4.0 GB of 4.28 GB -> NOT memory exhaustion.
+- `--disable-http-cache --v8-cache-options=none` + empty profile: STILL crashes
+  -> NOT the disk/V8 code cache or storage path.
+- Address-space overlap test (the peer's hypothesis B, run natively on arm64 via
+  a cross-compiled C probe): reserve 256 MB PROT_NONE|MAP_NORESERVE, then do anon
+  + file mmaps -> ALL land ABOVE the reservation, overlap_hits=0; mprotect RW/RWX
+  commit into the reservation works. So on arm64 Haiku, foreign mmaps never land
+  inside a V8/PA-style reservation -> hypothesis B is REFUTED on arm64. (It may
+  still hold on x86, which is 32-bit / ~2 GB user space and address-cramped; the
+  x86 session sees a parallel V8 StringTable crash whose fault address is in the
+  >2 GB kernel range. Same V8 string-table subsystem, likely DIFFERENT root cause
+  per architecture.)
+
+CONCLUSION: the arm64 naver crash is a DETERMINISTIC corruption of V8's
+AstValueFactory string_table_ (base::TemplateHashMapImpl) during parse of naver's
+heavy JS -- independent of threading, memory pressure, disk/code cache, and
+address-space overlap. An entry ends up with its exists bit set but a null/garbage
+key (the prior "occupancy overcounts" guard in v8/src/base/hashmap.h Resize is a
+symptom of the same thing). Remaining candidates: a V8 arm64 codegen/zone-
+alignment bug, or inconsistent AstRawString hashing that makes Probe double-insert
+on naver's specific strings. Pinning it needs V8 instrumentation = a Chromium
+rebuild (a second ninja), which the port rules forbid in this state -- so this is
+the handoff point: root-cause direction established and every environmental cause
+ruled out; the fix is a follow-up build task.
+
+Repro env (reusable): grafted TLSDESC image /tmp/nosstrace.iso on the M4 (boot
+via /tmp/cstest-launch.sh on port 2325), content_shell + 4 KB-relinked shim on
+csdata.img mounted at /boot/home/cs. The arm64 B-probe source is in the session
+scratchpad (btest.c) and cross-compiles with aarch64-unknown-haiku-gcc.
