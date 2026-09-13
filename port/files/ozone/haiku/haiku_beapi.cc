@@ -229,4 +229,27 @@ void HaikuEventBridge::OnFrameMoved(float x,
                                 window_, bounds));
 }
 
+void HaikuEventBridge::OnNavigateBack() {
+  ui_task_runner_->PostTask(
+      FROM_HERE, base::BindOnce(&HaikuWindow::OnToolbarBack, window_));
+}
+
+void HaikuEventBridge::OnNavigateForward() {
+  ui_task_runner_->PostTask(
+      FROM_HERE, base::BindOnce(&HaikuWindow::OnToolbarForward, window_));
+}
+
+void HaikuEventBridge::OnReloadOrStop() {
+  ui_task_runner_->PostTask(
+      FROM_HERE, base::BindOnce(&HaikuWindow::OnToolbarReloadOrStop, window_));
+}
+
+void HaikuEventBridge::OnNavigateToURL(const char* utf8) {
+  // The pointer is only valid during this call, so copy before posting.
+  std::string text(utf8 != nullptr ? utf8 : "");
+  ui_task_runner_->PostTask(
+      FROM_HERE, base::BindOnce(&HaikuWindow::OnToolbarNavigateToURL, window_,
+                                std::move(text)));
+}
+
 }  // namespace ui

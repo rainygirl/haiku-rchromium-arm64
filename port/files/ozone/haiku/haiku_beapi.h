@@ -60,6 +60,11 @@ class HaikuEventBridge : public haiku_shim::Delegate {
   void OnQuitRequested() override;
   void OnActivated(bool active) override;
   void OnFrameMoved(float x, float y, float width, float height) override;
+  // R Chromium native toolbar events, forwarded to the UI thread.
+  void OnNavigateBack() override;
+  void OnNavigateForward() override;
+  void OnReloadOrStop() override;
+  void OnNavigateToURL(const char* utf8) override;
 
  private:
   base::WeakPtr<HaikuWindow> window_;

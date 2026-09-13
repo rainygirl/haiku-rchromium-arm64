@@ -39,6 +39,7 @@ python3 "$HERE/port-base-posix.py" "$SRC"
 python3 "$HERE/port-message-pump.py" "$SRC"
 python3 "$HERE/port-perfetto-os-lists.py" "$SRC"
 python3 "$HERE/port-crubit.py" "$SRC"
+python3 "$HERE/port-content-shell-ui.py" "$SRC"
 
 # 5. The toolchain and config files, which have no upstream counterpart to
 #    patch and are simply added.

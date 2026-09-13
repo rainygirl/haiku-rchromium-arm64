@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
@@ -89,6 +90,18 @@ class HaikuWindow : public PlatformWindow {
   void OnBoundsChangedFromWindowThread(const gfx::Rect& bounds);
   void OnCloseRequestedFromWindowThread();
   void OnActivationChangedFromWindowThread(bool active);
+
+  // R Chromium native toolbar. The first group runs on the UI thread
+  // (posted by the bridge) and drives navigation through the registered
+  // HaikuToolbarObserver; the second is called from the delegate on the
+  // UI thread and pushes state down into the shim toolbar.
+  void OnToolbarBack();
+  void OnToolbarForward();
+  void OnToolbarReloadOrStop();
+  void OnToolbarNavigateToURL(std::string text);
+  void SetToolbarAddress(const std::string& url);
+  void SetToolbarLoading(bool loading);
+  void SetToolbarNavigationEnabled(bool back, bool forward);
 
   base::WeakPtr<HaikuWindow> GetWeakPtr() {
     return weak_ptr_factory_.GetWeakPtr();

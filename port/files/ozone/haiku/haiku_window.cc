@@ -7,8 +7,11 @@
 // BBitmap is deleted here when a frame cannot be handed to the window.
 #include <Bitmap.h>
 
+#include <map>
 #include <memory>
 #include <utility>
+
+#include "base/no_destructor.h"
 
 #include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
@@ -19,9 +22,21 @@
 #include "ui/events/event.h"
 #include "ui/ozone/platform/haiku/haiku_beapi.h"
 #include "ui/ozone/platform/haiku/haiku_shim.h"
+#include "ui/ozone/platform/haiku/haiku_toolbar_bridge.h"
 #include "ui/ozone/platform/haiku/haiku_window_manager.h"
 
 namespace ui {
+
+namespace {
+
+// widget -> HaikuWindow, so the toolbar-bridge free functions can find the
+// window to push state into. UI-thread-only, like the bridge's observer map.
+std::map<gfx::AcceleratedWidget, HaikuWindow*>& ToolbarWindowMap() {
+  static base::NoDestructor<std::map<gfx::AcceleratedWidget, HaikuWindow*>> m;
+  return *m;
+}
+
+}  // namespace
 
 HaikuWindow::HaikuWindow(PlatformWindowDelegate* delegate,
                          HaikuWindowManager* manager,
@@ -34,9 +49,11 @@ HaikuWindow::HaikuWindow(PlatformWindowDelegate* delegate,
   widget_ = manager_->AddWindow(this);
 
   bridge_ = std::make_unique<HaikuEventBridge>(GetWeakPtr(), ui_task_runner_);
-  window_ = haiku_shim::HaikuShimCreateWindow(bounds.x(), bounds.y(),
-                                              bounds.width(), bounds.height(),
-                                              has_frame, bridge_.get());
+  // A framed top-level window carries the R Chromium native toolbar.
+  window_ = haiku_shim::HaikuShimCreateWindow(
+      bounds.x(), bounds.y(), bounds.width(), bounds.height(), has_frame,
+      /*with_toolbar=*/has_frame, bridge_.get());
+  ToolbarWindowMap()[widget_] = this;
 
   delegate_->OnAcceleratedWidgetAvailable(widget_);
 }
@@ -51,6 +68,7 @@ HaikuWindow::~HaikuWindow() {
   }
   bridge_.reset();
   delegate_->OnAcceleratedWidgetDestroyed();
+  ToolbarWindowMap().erase(widget_);
   manager_->RemoveWindow(widget_, this);
 }
 
@@ -274,6 +292,74 @@ void HaikuWindow::UpdateWindowState(PlatformWindowState new_state) {
   const PlatformWindowState old_state = window_state_;
   window_state_ = new_state;
   delegate_->OnWindowStateChanged(old_state, new_state);
+}
+
+void HaikuWindow::OnToolbarBack() {
+  if (HaikuToolbarObserver* obs = GetHaikuToolbarObserver(widget_)) {
+    obs->OnNavigateBack();
+  }
+}
+
+void HaikuWindow::OnToolbarForward() {
+  if (HaikuToolbarObserver* obs = GetHaikuToolbarObserver(widget_)) {
+    obs->OnNavigateForward();
+  }
+}
+
+void HaikuWindow::OnToolbarReloadOrStop() {
+  if (HaikuToolbarObserver* obs = GetHaikuToolbarObserver(widget_)) {
+    obs->OnReloadOrStop();
+  }
+}
+
+void HaikuWindow::OnToolbarNavigateToURL(std::string text) {
+  if (HaikuToolbarObserver* obs = GetHaikuToolbarObserver(widget_)) {
+    obs->OnNavigateToURL(text);
+  }
+}
+
+void HaikuWindow::SetToolbarAddress(const std::string& url) {
+  if (window_) {
+    window_->SetAddressText(url.c_str());
+  }
+}
+
+void HaikuWindow::SetToolbarLoading(bool loading) {
+  if (window_) {
+    window_->SetLoadingState(loading);
+  }
+}
+
+void HaikuWindow::SetToolbarNavigationEnabled(bool back, bool forward) {
+  if (window_) {
+    window_->SetNavigationEnabled(back, forward);
+  }
+}
+
+// Toolbar-bridge state-push entry points (declared in haiku_toolbar_bridge.h).
+// The window lookup lives here because this is where the widget->window map is.
+void HaikuToolbarSetAddress(gfx::AcceleratedWidget widget,
+                            const std::string& url) {
+  auto it = ToolbarWindowMap().find(widget);
+  if (it != ToolbarWindowMap().end()) {
+    it->second->SetToolbarAddress(url);
+  }
+}
+
+void HaikuToolbarSetLoading(gfx::AcceleratedWidget widget, bool loading) {
+  auto it = ToolbarWindowMap().find(widget);
+  if (it != ToolbarWindowMap().end()) {
+    it->second->SetToolbarLoading(loading);
+  }
+}
+
+void HaikuToolbarSetNavigationEnabled(gfx::AcceleratedWidget widget,
+                                      bool back,
+                                      bool forward) {
+  auto it = ToolbarWindowMap().find(widget);
+  if (it != ToolbarWindowMap().end()) {
+    it->second->SetToolbarNavigationEnabled(back, forward);
+  }
 }
 
 }  // namespace ui
