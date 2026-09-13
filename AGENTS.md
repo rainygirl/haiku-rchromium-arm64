@@ -98,13 +98,24 @@ The headline job is the BeAPI native UI (decided 2026-09-13). It, and the
 install/branding that follow, need the M4 container and a running RENKU arm64
 image, which are driven from other sessions.
 
-1. **Native BeAPI toolbar on content_shell (the main task).** Switch the target
-   from `//chrome` to `//content/shell:content_shell`, add a
-   `shell_platform_delegate_haiku.cc`, build the icon-only Back/Forward/Reload
-   toolbar, address field and date-grouped searchable bookmarks with BeAPI
-   controls, and wire them to `Shell` through the post-to-UI-thread pattern. Full
-   plan and the CH154-vs-CH87 deltas: `docs/browser-ui-plan.md`. Do this on arm64
-   first, then port to the x86 (Chromium 87) repo.
+1. **Native BeAPI toolbar on content_shell (the main task, in progress).**
+   Done and compile-verified against the Chromium 154 tree (2026-09-13):
+   - the toolbar itself in the shim (`haiku_shim.cc`: Back/Forward/Reload
+     BButtons + address BTextControl + content-view inset) -- compiles and links
+     into libchromium_haiku.so;
+   - the ozone wiring (`haiku_toolbar_bridge.{h,cc}`, `haiku_beapi`,
+     `haiku_window`) that carries toolbar events to the UI thread and pushes
+     state back;
+   - `content/shell/browser/shell_platform_delegate_haiku.cc`, selected by
+     `port-content-shell-ui.py`, turning toolbar events into GoBackOrForward/
+     Reload/Stop/LoadURL and pushing address/loading/enabled state down.
+   Still to do: build a full `content_shell` (the current `out/haiku-arm64` was
+   configured for `//chrome:chrome`, so `gn gen` has to include the
+   `//content/shell:content_shell` target), replace the text button labels with
+   the HVIF icons for icon-only controls, add date-grouped searchable bookmarks,
+   and run it on the arm64 VM to verify rendering and the re-navigation hazard
+   below. Then port to the x86 (Chromium 87) repo. Full plan and the CH154-vs-CH87
+   deltas: `docs/browser-ui-plan.md`.
 2. **Brand it.** Apply `../assets/rchromium.hvif`, set the app name to R Chromium
    and a real signature, so it is not stock "Chromium".
 3. **Install into the image.** Rebuild the hpkg **zlib-compressed, not zstd**
