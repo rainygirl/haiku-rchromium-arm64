@@ -60,6 +60,18 @@ The RENKU arm64 image must carry the `A0001` runtime_loader TLSDESC patch (see
 `../haiku_kernel_patches/`), or the binary will not load. Launch flags that the
 port currently needs are recorded in `AGENTS.md`.
 
+## Relationship to the x86 port
+
+`../rchromium-native-x86/` has its own, independently written native toolbar
+(Chromium 87, BControlLook-drawn) that meets the same user spec. It is not a
+backport of this one and this is not a backport of it -- the Chromium 87 vs 154
+APIs differ, so no source is shared. What IS shared is the design: a widget-keyed
+bridge so content_shell never sees a BeAPI type, RTTI isolation in a separately
+built shim, an explicit `platform_->aura->ShowWindow()` in the delegate, and the
+SetAddressBarURL / SetIsLoading / EnableUIControl hook mapping. Both toolbars
+already exist and work; do not reimplement one to match the other unless the user
+asks to converge the two styles. See `AGENTS.md` for detail.
+
 ## 요약
 
 AArch64용 전체 Chromium 154 포트입니다. `../x86/`(32비트 content_shell)와는 다른
