@@ -359,3 +359,65 @@ authorized_keys into a boot image); it needs the user's explicit go-ahead.
 Alternative without image modification: drive the gen anyboot via QMP keyboard in
 a Terminal, write logs to the shared csdata disk, then read them from a renku_guest
 image with csdata attached.
+
+### naver --single-threaded live test: TLSDESC loader blocker SOLVED, shim blocker + Docker wedge (2026-09-13, later)
+
+Pushed the live-test setup much further. Key results:
+
+TLSDESC LOADER FIX (reusable). content_shell (124 R_AARCH64_TLSDESC relocs) and
+libtest_trace_processor.so (9) need a runtime_loader with TLSDESC support. The
+renku-verify boot images on the M4 (renku-fix2, renku-nossldev; login = baron +
+~/.ssh/renku_guest) have loaders that LACK it ("Troubles relocating: Bad data").
+The gen-arm64 anyboot (/root/gen-arm64/haiku-minimum-anyboot.iso) has a TLSDESC
+loader but is a "minimum" profile that hangs at the boot splash in QEMU (never
+reaches userland/network/sshd), so it is unusable for a networked test. Fix:
+graft the TLSDESC loader into a renku-verify image's haiku.hpkg. Steps (all in
+the haiku-builder container, which has 846G free vs the M4's ~2G):
+  1. Copy renku-nossldev.iso into the container; parse MBR part0 (type 0xeb, LBA
+     8192 = byte offset 4194304); `dd ... skip=8192 count=921600` to /tmp/noss.part.
+  2. Rebuild the loader from CURRENT source (the checked-out
+     src/system/runtime_loader/elf_load_image.cpp is NEWER than the prebuilt
+     00:59 loader, so use jam, not the stale binary):
+     `cd /root/gen-arm64 && /haiku-build/buildtools/jam/bin.linuxx86/jam -q -j1 runtime_loader`
+     -> objects/haiku/arm64/release/system/runtime_loader/runtime_loader.
+  3. Replace it inside the image's haiku pkg with the host package tool:
+     `package add -f -C <dir> /tmp/haiku_noss.hpkg runtime_loader` (the loader is
+     at package path "runtime_loader", TOP level = /boot/system/runtime_loader,
+     NOT "system/runtime_loader"). Extract/put the hpkg with bfs_shell
+     (`cp /myfs/system/packages/haiku-...hpkg :/host`, and back), always issue
+     `sync` before `quit` (bfs_shell's unmount reports "busy" but sync flushes).
+  4. dd the partition back into an iso copy (`seek=8192 conv=notrunc`), copy the
+     iso to the M4, boot on 2325 with csdata.img attached.
+Result: the grafted image BOOTS in ~40s to sshd (loader<->libroot ABI across
+hrev99000 libs + hrev99002+175 loader is compatible), and content_shell now gets
+PAST libtest_trace_processor.so (TLSDESC resolved). So the TLSDESC blocker is
+solved. Host tools: bfs_shell/package/anyboot at
+/root/gen-arm64/objects/linux/x86_64/release/tools/.
+
+OPEN BLOCKER -- the shim fails to load: `libchromium_haiku.so: Troubles handling
+dynamic section`. Instrumented the loader (FATAL uses dprintf -> guest
+/var/log/syslog, and printf to stdout only while !gProgramLoaded, so read the
+guest syslog, not just the app's stderr). syslog shows `runtime_loader: DBG no
+symhash` -> parse_dynamic_segment's `if (!image->symhash) return false` fires:
+image->symhash is null for the shim even though `readelf -d` shows it HAS DT_HASH
+(0x120) (and, after relinking with `-Wl,--hash-style=both`, GNU_HASH too). The
+DT_HASH case sets symhash = d_ptr + regions[0].delta, which should be non-null.
+content_shell and libtest (both have DT_HASH + GNU_HASH) load fine; only the
+gcc-built, libstdc++/symbol-versioned shim hits this. NOT yet root-caused --
+needs runtime tracing of the dynamic-tag loop for the shim (print each d_tag +
+the symhash assignment). The shim relinked with GNU_HASH is at
+container:/tmp/libshim_gnu.so; deployed at csdata:/boot/home/cs/lib/.
+
+INFRA: Docker Desktop's engine wedged after many rapid `docker exec` streams
+(even `docker version`/`docker ps` hang; `killall Docker; open -a Docker` from
+SSH relaunched the app - 22 procs - but the engine did not come back, likely
+needs a Mac GUI restart of Docker Desktop). All container work is blocked until
+Docker is healthy. Artifacts persist in the container's writable layer; the last
+good grafted+debug image is on the M4 at /tmp/nossdbg.iso, csdata.img holds the
+deployed content_shell. Launcher /tmp/cstest-launch.sh (ISO= line points at the
+image; boot on port 2325, QMP /tmp/cstest.qmp).
+
+NOTE on the ultimate fix: even once content_shell runs and --js-flags=
+--single-threaded confirms the hypothesis, the actual V8 fix needs a Chromium
+rebuild (a second ninja), which the port rules forbid in this state -- so the
+diagnostic is the deliverable here, and the fix itself is a follow-up build.
