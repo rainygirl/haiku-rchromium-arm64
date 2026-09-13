@@ -3,9 +3,11 @@
 Full Chromium `//chrome` built for Haiku on AArch64, so it runs on Apple
 Silicon under Hypervisor.framework at native speed rather than emulating x86.
 
-This is a different port from `../x86/`: a modern Chromium (154) with Chrome's
-own UI, not the 32-bit `content_shell` + custom-toolbar approach. See
-[`AGENTS.md`](AGENTS.md) for how it was built and what is left.
+This is the sister port to `../rchromium-native-x86/`. The current binary is the
+full `//chrome` (Chrome's own UI), but the direction (decided 2026-09-13) is to
+converge on the same product as x86: `content_shell` wrapped in a hand-written
+BeAPI toolbar, built here first and then ported to x86. See
+[`docs/browser-ui-plan.md`](docs/browser-ui-plan.md) and [`AGENTS.md`](AGENTS.md).
 
 ## What is here
 

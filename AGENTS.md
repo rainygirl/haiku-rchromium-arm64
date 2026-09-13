@@ -38,10 +38,12 @@ behind.
   icon is the stock one, and the signature is `application/x-vnd.Chromium-Ozone`.
   The blue R Chromium icon (`../assets/rchromium.hvif`), the name and an app
   signature have not been applied.
-- **Not the x86 "R Chromium" UI.** This is Chrome's own toolbar, omnibox and
-  bookmarks -- which is *more* browser chrome than the x86 side has, but it is
-  not the icon-only BeAPI toolbar + date-grouped bookmarks that
-  `../x86/docs/browser-ui-plan.md` designs. The two platforms have not converged.
+- **Not the R Chromium UI (and this is now the main job).** Today it is Chrome's
+  own toolbar, omnibox and bookmarks. The decision (2026-09-13) is to converge
+  both platforms on one product: `content_shell` wrapped in a hand-written BeAPI
+  toolbar, implemented here on arm64 first and then ported to x86. That means
+  dropping the `//chrome` target for `//content/shell:content_shell` and building
+  the native UI. See `docs/browser-ui-plan.md`.
 
 ## How this port is put together
 
@@ -92,26 +94,30 @@ reconciliation; do that before trusting it.
 
 ## Remaining work
 
-Ordered roughly by what unblocks the goal. Items 1-4 need the M4 container and a
-running RENKU arm64 image, which are driven from other sessions.
+The headline job is the BeAPI native UI (decided 2026-09-13). It, and the
+install/branding that follow, need the M4 container and a running RENKU arm64
+image, which are driven from other sessions.
 
-1. **Install into the image.** Rebuild the hpkg **zlib-compressed, not zstd**
+1. **Native BeAPI toolbar on content_shell (the main task).** Switch the target
+   from `//chrome` to `//content/shell:content_shell`, add a
+   `shell_platform_delegate_haiku.cc`, build the icon-only Back/Forward/Reload
+   toolbar, address field and date-grouped searchable bookmarks with BeAPI
+   controls, and wire them to `Shell` through the post-to-UI-thread pattern. Full
+   plan and the CH154-vs-CH87 deltas: `docs/browser-ui-plan.md`. Do this on arm64
+   first, then port to the x86 (Chromium 87) repo.
+2. **Brand it.** Apply `../assets/rchromium.hvif`, set the app name to R Chromium
+   and a real signature, so it is not stock "Chromium".
+3. **Install into the image.** Rebuild the hpkg **zlib-compressed, not zstd**
    (zstd hpkg files install silently empty on this kernel -- check bytes 18-19,
    `0001` zlib / `0002` zstd), verify `readelf -d NEEDED` against a known-good
    reference (a package's `requires:` does not prove the binary's `DT_NEEDED`),
    then deploy through `~/Workspace/renku-arm64/make-renku-repo.sh` to
    `renku-repo.coroke.net/arm64`, or bake it into the image definition.
-2. **Make it appear in the Deskbar.** Promote the binary's icon and signature
+4. **Make it appear in the Deskbar.** Promote the binary's icon and signature
    from resources to attributes (`resattr`), then `mimeset`; Deskbar reads
-   attributes, not resources. Same trap the x86 install notes describe.
-3. **Brand it.** Apply `../assets/rchromium.hvif`, set the app name to
-   R Chromium and a real signature, so it is not stock "Chromium".
-4. **Sandbox.** Currently `--no-sandbox` (no seccomp/namespaces/zygote on
+   attributes, not resources.
+5. **Sandbox.** Currently `--no-sandbox` (no seccomp/namespaces/zygote on
    Haiku). Structural: a real design or an accepted limitation, documented.
-5. **Decide UI convergence with x86.** Either accept two products (minimal
-   BeAPI-toolbar content_shell on 32-bit x86, full Chrome on arm64) or converge
-   on one. This is a product decision, not a code fix -- flag it, do not pick
-   silently.
 6. **Re-run a clean-checkout build** after the reconciliation above and record
    the exact `gn gen`/`ninja` invocation and revision that reproduces the binary.
 
