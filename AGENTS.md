@@ -44,6 +44,27 @@ An earlier arm64 run this session did render google.com, consistent with the
 intermittence. This is independent of the toolbar; re-test heavy pages on a
 fresh VM boot rather than treating it as a toolbar or missing-patch bug.
 
+Fresh-boot re-verification (2026-09-13): after a VM reboot, google.com renders
+under the toolbar with no crash (the aged-session V8 fault above did not recur,
+confirming its diagnosis). news.naver.com is a separate matter -- it loads far
+enough to run the page's JavaScript (naver's gfp-core.js / news.mobile.js log to
+the console), then aborts with a message-pump/fd porting bug, not a toolbar or
+V8 issue:
+
+    MessagePumpEpoll: unhandled poll revents 0x1000 on fd 0; treating as an error
+    net/base/net_errors_posix: Socket operation on non-socket -> ERR_FAILED
+    platform_shared_memory_region_posix: fcntl(0, F_GETFL) failed: Bad file descriptor
+    FATAL base/types/expected_internal.h:310 Check failed: state_ == State::kValue
+
+fd 0 is stdin, which the launch redirects from /dev/null; something in the poll
+message pump / POSIX shared-memory path treats fd 0 as a socket/usable fd and
+gets POLLNVAL (0x1000) / EBADF, then a base::expected error is unwrapped as a
+value. Leads to chase (separate arm64-port task, not the toolbar): try launching
+with a real stdin rather than /dev/null; and audit the Haiku poll-pump
+(base/message_loop/epoll_shim_haiku.h path) and process_metrics/shared-memory
+fd handling. Two distinct heavy-page port bugs now stand between the arm64 build
+and reliable general browsing; both are independent of the native UI.
+
 Launch flags that work on the VM (software render, single process):
 `--ozone-platform=haiku --no-sandbox --single-process --disable-gpu
 --in-process-gpu --disable-gpu-compositing --user-data-dir=<writable>`; set
