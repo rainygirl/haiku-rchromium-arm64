@@ -318,27 +318,15 @@ void HaikuWindow::OnToolbarNavigateToURL(std::string text) {
   }
 }
 
-void HaikuWindow::OnToolbarAddBookmark() {
-  if (HaikuToolbarObserver* obs = GetHaikuToolbarObserver(widget_)) {
-    obs->OnAddBookmark();
-  }
-}
-
-void HaikuWindow::OnToolbarShowBookmarks() {
-  if (HaikuToolbarObserver* obs = GetHaikuToolbarObserver(widget_)) {
-    obs->OnShowBookmarks();
-  }
-}
-
-void HaikuWindow::ShowToolbarBookmarks(const std::string& tsv) {
-  if (window_) {
-    window_->ShowBookmarksWindow(tsv.c_str());
-  }
-}
-
 void HaikuWindow::SetToolbarAddress(const std::string& url) {
   if (window_) {
     window_->SetAddressText(url.c_str());
+  }
+}
+
+void HaikuWindow::SetToolbarTitle(const std::string& title) {
+  if (window_) {
+    window_->SetPageTitleText(title.c_str());
   }
 }
 
@@ -380,11 +368,11 @@ void HaikuToolbarSetNavigationEnabled(gfx::AcceleratedWidget widget,
   }
 }
 
-void HaikuToolbarShowBookmarks(gfx::AcceleratedWidget widget,
-                               const std::string& tsv) {
+void HaikuToolbarSetTitle(gfx::AcceleratedWidget widget,
+                          const std::string& title) {
   auto it = ToolbarWindowMap().find(widget);
   if (it != ToolbarWindowMap().end()) {
-    it->second->ShowToolbarBookmarks(tsv);
+    it->second->SetToolbarTitle(title);
   }
 }
 

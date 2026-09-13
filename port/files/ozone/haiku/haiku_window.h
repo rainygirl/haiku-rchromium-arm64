@@ -99,10 +99,8 @@ class HaikuWindow : public PlatformWindow {
   void OnToolbarForward();
   void OnToolbarReloadOrStop();
   void OnToolbarNavigateToURL(std::string text);
-  void OnToolbarAddBookmark();
-  void OnToolbarShowBookmarks();
-  void ShowToolbarBookmarks(const std::string& tsv);
   void SetToolbarAddress(const std::string& url);
+  void SetToolbarTitle(const std::string& title);
   void SetToolbarLoading(bool loading);
   void SetToolbarNavigationEnabled(bool back, bool forward);
 

@@ -65,9 +65,6 @@ class Delegate {
   // loading state last pushed through NativeWindow::SetLoadingState.
   virtual void OnReloadOrStop() {}
   virtual void OnNavigateToURL(const char* utf8) {}
-  // Toolbar bookmark actions.
-  virtual void OnAddBookmark() {}
-  virtual void OnShowBookmarks() {}
 
  protected:
   // Not virtual on purpose: the shim never owns or destroys a delegate.
@@ -99,12 +96,10 @@ class NativeWindow {
   // takes the window lock itself. No-ops when the window was created without
   // a toolbar.
   virtual void SetAddressText(const char* utf8) = 0;
+  // The page title, filed by the star button when a page is bookmarked.
+  virtual void SetPageTitleText(const char* utf8) = 0;
   virtual void SetLoadingState(bool loading) = 0;
   virtual void SetNavigationEnabled(bool back, bool forward) = 0;
-  // Opens the searchable, date-grouped bookmarks window. `tsv` is one
-  // bookmark per line as "url\ttitle\tYYYY-MM-DD"; the shim owns the
-  // window and calls Delegate::OnNavigateToURL when one is chosen.
-  virtual void ShowBookmarksWindow(const char* tsv) = 0;
 
   // Quits the window thread, which deletes the BWindow and this object with
   // it. No delegate call can arrive after this returns.
