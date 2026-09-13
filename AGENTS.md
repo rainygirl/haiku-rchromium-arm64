@@ -47,23 +47,80 @@ fresh VM boot rather than treating it as a toolbar or missing-patch bug.
 Fresh-boot re-verification (2026-09-13): after a VM reboot, google.com renders
 under the toolbar with no crash (the aged-session V8 fault above did not recur,
 confirming its diagnosis). news.naver.com is a separate matter -- it loads far
-enough to run the page's JavaScript (naver's gfp-core.js / news.mobile.js log to
-the console), then aborts with a message-pump/fd porting bug, not a toolbar or
-V8 issue:
+enough to run the page's JavaScript, then crashes. NOT a toolbar issue.
 
-    MessagePumpEpoll: unhandled poll revents 0x1000 on fd 0; treating as an error
-    net/base/net_errors_posix: Socket operation on non-socket -> ERR_FAILED
-    platform_shared_memory_region_posix: fcntl(0, F_GETFL) failed: Bad file descriptor
-    FATAL base/types/expected_internal.h:310 Check failed: state_ == State::kValue
+CORRECTED DIAGNOSIS (2026-09-13, symbolized). The earlier "fd 0 message-pump"
+theory was WRONG. The `MessagePumpEpoll: unhandled poll revents 0x1000 on fd 0`
+line is a separate/downstream log, not the fault. The actual SEGV (SEGV_MAPERR
+address 0x10) was symbolized against the exact crashed binary
+(out/haiku-arm64/content_shell, 2026-09-13 08:46) with llvm-symbolizer. The
+reliable crash chain, top (faulting pc) first:
 
-fd 0 is stdin, which the launch redirects from /dev/null; something in the poll
-message pump / POSIX shared-memory path treats fd 0 as a socket/usable fd and
-gets POLLNVAL (0x1000) / EBADF, then a base::expected error is unwrapped as a
-value. Leads to chase (separate arm64-port task, not the toolbar): try launching
-with a real stdin rather than /dev/null; and audit the Haiku poll-pump
-(base/message_loop/epoll_shim_haiku.h path) and process_metrics/shared-memory
-fd handling. Two distinct heavy-page port bugs now stand between the arm64 build
-and reliable general browsing; both are independent of the native UI.
+    v8::internal::AstRawString::Equal            <- pc, SEGV @ 0x10 (garbage key)
+    v8::base::TemplateHashMapImpl<AstRawString>::Resize()
+    v8::internal::AstValueFactory::GetString
+    v8::internal::Parser::ParseVariableDeclarations / ...parser...
+    v8::internal::Parser::DoParseProgram
+    PushAllRegistersAndIterateStack              (stack marker)
+    v8::internal::Parser::ParseOnBackground
+    v8::internal::BackgroundCompileTask::Run()
+
+So it is a V8 BACKGROUND JS-PARSE crash: the AstValueFactory string-table hashmap
+(TemplateHashMapEntry: {AstRawString* key; uint32_t hash_and_exists_}, exists =
+bit 31) holds an entry whose exists bit is set but whose key is null/garbage;
+`Resize()` calls the match function (`AstRawString::Equal`) on it and derefs
+key+0x10. No MessagePumpEpoll / fd-0 frame appears anywhere in the stack.
+Consistent with x86 (87) never showing this -- 87 uses a different
+compile/parse-thread path.
+
+A prior session ALREADY hit this failure class and left a guard in
+v8/src/base/hashmap.h `Resize()` (bounds the rehash loop by the old array end,
+not just by `occupancy()`, and fprintf's "v8 hashmap Resize: occupancy
+overcounts live entries by %u"). That guard IS compiled into the 08:46 binary,
+yet the crash recurred -- so it is an IN-BOUNDS corrupted entry (exists bit set
+on a slot with a garbage key), not the walk-off-the-end variant the guard fixes.
+Backing memory IS zeroed (Initialize -> Clear -> memset) and the map is
+single-thread per parse task, so the corruption is either external heap
+corruption writing into the backing array, or a torn write to
+`hash_and_exists_`.
+
+Ruled OUT statically this session:
+- PartitionAlloc/V8 page-size mismatch: Haiku arm64 is 4 KB
+  (arch/arm64/arch_vm.h PAGE_SHIFT 12; posix/arch/arm64/limits.h PAGESIZE 4096),
+  which MATCHES PartitionAlloc's hardcoded 4 KB. Note: PartitionAlloc's runtime
+  page-size path (NONCONST_PAGE_SIZE) is only enabled for Android/Linux arm64,
+  NOT Haiku -- harmless here only because Haiku arm64 is 4 KB.
+- Thread stack bounds: V8 gets them via GNU `pthread_getattr_np` (no
+  platform-haiku override) -> Haiku `__pthread_attr_get_np` fills stack_base/
+  stack_end from `_kern_get_thread_info`; V8 computes stack_start = base+size =
+  stack_end (top of a down-growing stack), which is correct. A 0x10 fault does
+  not match a stack-bounds symptom anyway.
+
+DECISIVE NEXT TEST (needs a live arm64 content_shell VM; see below): relaunch
+news.naver.com with `--js-flags=--single-threaded` (disables V8 background
+threads). Survives -> background-thread-specific (race / torn write on the
+string table). Still crashes on the main thread -> external heap corruption.
+Also watch stderr for the "occupancy overcounts" diagnostic; if it fires, the
+overcount path is active and the printed delta says how far off. Follow-ups if
+overcount is confirmed: instrument FillEmptyEntry/Remove, or build with
+`v8_enable_verify_heap`.
+
+VM STATUS (2026-09-13): the live test is currently gated. The one arm64 QEMU on
+the M4 (10.0.0.116) is running someone else's install (/tmp/n.iso, hostfwd
+2341->22, QMP /tmp/nsd.qmp, actively writing -- likely the "rworldradio Haiku
+ARM64 install" session); do not kill it. Our former content_shell guest (was on
+hostfwd 2224) is down, and there is no pre-built image with content_shell
+deployed -- the renku-verify ISOs (~479 MB) are base Haiku for boot checks only.
+content_shell arm64 binary is ready at
+/haiku-build/chromium/src/out/haiku-arm64/content_shell (323 MB) in the
+container; running the test means booting a base Haiku arm64 anyboot
+(/root/gen-arm64/haiku-minimum-anyboot.iso or /haiku-build/renku-anyboot.iso) in
+a second QEMU and deploying content_shell into it.
+
+Address-bar scheme (2026-09-13): arm64 is correct -- the shim passes raw
+address text to the delegate and shell_platform_delegate_haiku.cc prepends
+`https://` (not http://) for bare hosts. The http:// issue the peer fixed is
+x86-only.
 
 Launch flags that work on the VM (software render, single process):
 `--ozone-platform=haiku --no-sandbox --single-process --disable-gpu
