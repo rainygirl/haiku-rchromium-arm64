@@ -55,6 +55,17 @@ class Delegate {
   virtual void OnActivated(bool active) = 0;
   virtual void OnFrameMoved(float x, float y, float width, float height) = 0;
 
+  // R Chromium native toolbar events. Fired on the BWindow's own thread,
+  // like the input callbacks above. Non-pure with empty defaults so a
+  // delegate that does not draw a toolbar (the plain ozone event bridge)
+  // need not implement them.
+  virtual void OnNavigateBack() {}
+  virtual void OnNavigateForward() {}
+  // Reload when idle, Stop when loading; the shim tells them apart from the
+  // loading state last pushed through NativeWindow::SetLoadingState.
+  virtual void OnReloadOrStop() {}
+  virtual void OnNavigateToURL(const char* utf8) {}
+
  protected:
   // Not virtual on purpose: the shim never owns or destroys a delegate.
   ~Delegate() {}
@@ -81,6 +92,13 @@ class NativeWindow {
                        float y,
                        float width,
                        float height) = 0;
+  // R Chromium native toolbar state, pushed from Chromium's UI thread. Each
+  // takes the window lock itself. No-ops when the window was created without
+  // a toolbar.
+  virtual void SetAddressText(const char* utf8) = 0;
+  virtual void SetLoadingState(bool loading) = 0;
+  virtual void SetNavigationEnabled(bool back, bool forward) = 0;
+
   // Quits the window thread, which deletes the BWindow and this object with
   // it. No delegate call can arrive after this returns.
   virtual void DestroyWindow() = 0;
@@ -103,6 +121,7 @@ NativeWindow* HaikuShimCreateWindow(float x,
                               float width,
                               float height,
                               bool has_frame,
+                              bool with_toolbar,
                               Delegate* delegate);
 
 // The main screen's frame, as x, y, width, height.

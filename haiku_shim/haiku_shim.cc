@@ -15,6 +15,9 @@
 #include <Screen.h>
 #include <View.h>
 #include <Window.h>
+#include <Button.h>
+#include <TextControl.h>
+#include <InterfaceDefs.h>
 
 namespace haiku_shim {
 
@@ -23,6 +26,16 @@ namespace {
 // The signature app_server files this team under. It has to be a valid MIME
 // type or BApplication refuses to construct.
 const char kAppSignature[] = "application/x-vnd.Chromium-Ozone";
+
+// The R Chromium native toolbar. Height in pixels of the strip above the web
+// content, and the BMessage `what` codes the controls post to the window.
+const float kToolbarHeight = 32.0f;
+enum {
+  kMsgBack = 'back',
+  kMsgForward = 'fwrd',
+  kMsgReloadOrStop = 'rlod',
+  kMsgGo = 'entr',
+};
 
 sem_id g_app_ready = -1;
 bool g_app_started = false;
@@ -113,7 +126,7 @@ class ShimView : public BView {
 
 class ShimWindow : public BWindow, public NativeWindow {
  public:
-  ShimWindow(BRect frame, bool has_frame, Delegate* delegate)
+  ShimWindow(BRect frame, bool has_frame, bool with_toolbar, Delegate* delegate)
       // Borderless is a window_look, not a window_type: the window_type enum
       // has no undecorated member, so this takes the look/feel constructor
       // and names the decoration directly.
@@ -122,8 +135,14 @@ class ShimWindow : public BWindow, public NativeWindow {
                 has_frame ? B_TITLED_WINDOW_LOOK : B_NO_BORDER_WINDOW_LOOK,
                 B_NORMAL_WINDOW_FEEL,
                 B_ASYNCHRONOUS_CONTROLS),
-        delegate_(delegate) {
-    view_ = new ShimView(Bounds(), delegate);
+        delegate_(delegate),
+        with_toolbar_(with_toolbar) {
+    BRect content = Bounds();
+    if (with_toolbar_) {
+      content.top = kToolbarHeight;
+      BuildToolbar(Bounds().Width());
+    }
+    view_ = new ShimView(content, delegate);
     AddChild(view_);
     // BWindow's constructor leaves the looper locked and does not start its
     // thread; Show() is what normally calls Run(). Do it here instead,
@@ -148,6 +167,27 @@ class ShimWindow : public BWindow, public NativeWindow {
   void FrameMoved(BPoint origin) {
     BRect f = Frame();
     delegate_->OnFrameMoved(origin.x, origin.y, f.Width() + 1, f.Height() + 1);
+  }
+
+  // The controls post plain BMessages to the window; MessageReceived turns
+  // them into delegate calls, on the window thread like every other callback.
+  void MessageReceived(BMessage* what) {
+    switch (what->what) {
+      case kMsgBack:
+        delegate_->OnNavigateBack();
+        break;
+      case kMsgForward:
+        delegate_->OnNavigateForward();
+        break;
+      case kMsgReloadOrStop:
+        delegate_->OnReloadOrStop();
+        break;
+      case kMsgGo:
+        delegate_->OnNavigateToURL(address_ != NULL ? address_->Text() : "");
+        break;
+      default:
+        BWindow::MessageReceived(what);
+    }
   }
 
   // NativeWindow:
@@ -234,6 +274,46 @@ class ShimWindow : public BWindow, public NativeWindow {
     UnlockLooper();
   }
 
+  void SetAddressText(const char* utf8) {
+    if (!with_toolbar_ || address_ == NULL) {
+      return;
+    }
+    if (!LockLooper()) {
+      return;
+    }
+    address_->SetText(utf8 != NULL ? utf8 : "");
+    UnlockLooper();
+  }
+
+  void SetLoadingState(bool loading) {
+    loading_ = loading;
+    if (!with_toolbar_ || reload_ == NULL) {
+      return;
+    }
+    if (!LockLooper()) {
+      return;
+    }
+    // Icon-only art comes later; for now the label carries Reload vs Stop.
+    reload_->SetLabel(loading ? "x" : "R");
+    UnlockLooper();
+  }
+
+  void SetNavigationEnabled(bool back, bool forward) {
+    if (!with_toolbar_) {
+      return;
+    }
+    if (!LockLooper()) {
+      return;
+    }
+    if (back_ != NULL) {
+      back_->SetEnabled(back);
+    }
+    if (forward_ != NULL) {
+      forward_->SetEnabled(forward);
+    }
+    UnlockLooper();
+  }
+
   void DestroyWindow() {
     // Quit() deletes the BWindow, and with it the view and this object.
     if (LockLooper()) {
@@ -242,8 +322,52 @@ class ShimWindow : public BWindow, public NativeWindow {
   }
 
  private:
+  // Runs in the constructor, before the window thread starts, so no lock.
+  void BuildToolbar(float width) {
+    toolbar_ = new BView(BRect(0, 0, width, kToolbarHeight - 1),
+                         "toolbar",
+                         B_FOLLOW_LEFT_RIGHT | B_FOLLOW_TOP,
+                         B_WILL_DRAW);
+    AddChild(toolbar_);
+
+    float x = 4;
+    const float bw = 30;
+    const float bh = kToolbarHeight - 6;
+    back_ = new BButton(BRect(x, 3, x + bw, 3 + bh), "back", "<",
+                        new BMessage(kMsgBack));
+    x += bw + 4;
+    forward_ = new BButton(BRect(x, 3, x + bw, 3 + bh), "forward", ">",
+                           new BMessage(kMsgForward));
+    x += bw + 4;
+    reload_ = new BButton(BRect(x, 3, x + bw, 3 + bh), "reload", "R",
+                          new BMessage(kMsgReloadOrStop));
+    x += bw + 8;
+    address_ = new BTextControl(BRect(x, 4, width - 8, 3 + bh), "address", NULL,
+                                "", new BMessage(kMsgGo));
+    address_->SetDivider(0);
+    address_->SetResizingMode(B_FOLLOW_LEFT_RIGHT | B_FOLLOW_TOP);
+
+    toolbar_->AddChild(back_);
+    toolbar_->AddChild(forward_);
+    toolbar_->AddChild(reload_);
+    toolbar_->AddChild(address_);
+
+    // Deliver the controls' messages to this window, whatever thread built it.
+    back_->SetTarget(this);
+    forward_->SetTarget(this);
+    reload_->SetTarget(this);
+    address_->SetTarget(this);
+  }
+
   Delegate* delegate_;
   ShimView* view_;
+  bool with_toolbar_ = false;
+  bool loading_ = false;
+  BView* toolbar_ = NULL;
+  BButton* back_ = NULL;
+  BButton* forward_ = NULL;
+  BButton* reload_ = NULL;
+  BTextControl* address_ = NULL;
 };
 
 }  // namespace
@@ -285,9 +409,10 @@ extern "C" NativeWindow* HaikuShimCreateWindow(float x,
                                          float width,
                                          float height,
                                          bool has_frame,
+                                         bool with_toolbar,
                                                Delegate* delegate) {
   BRect frame(x, y, x + width - 1, y + height - 1);
-  return new ShimWindow(frame, has_frame, delegate);
+  return new ShimWindow(frame, has_frame, with_toolbar, delegate);
 }
 
 extern "C" void HaikuShimScreenFrame(float out_xywh[4]) {
