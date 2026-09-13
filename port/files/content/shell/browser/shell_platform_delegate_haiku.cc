@@ -42,7 +42,7 @@ namespace {
 
 // One per Shell. Receives toolbar events (on the UI thread, posted by the
 // ozone bridge) and turns them into Shell navigation.
-class ShellToolbarObserver : public ui::HaikuToolbarObserver {
+class ShellToolbarObserver final : public ui::HaikuToolbarObserver {
  public:
   ShellToolbarObserver(Shell* shell, gfx::AcceleratedWidget widget)
       : shell_(shell), widget_(widget) {}
@@ -101,7 +101,7 @@ class ShellToolbarObserver : public ui::HaikuToolbarObserver {
       base::ReadFileToString(path, &data);
     // Newest first: reverse the stored (append-order) lines.
     std::vector<std::string> lines = base::SplitString(
-        data, "\n", base::TRIM_WHITESPACE, base::SPLIT_HANDLE_EMPTY);
+        data, "\n", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
     std::string tsv;
     for (auto it = lines.rbegin(); it != lines.rend(); ++it) {
       if (!it->empty())
@@ -139,10 +139,6 @@ struct ShellPlatformDelegate::PlatformData {
 
 ShellPlatformDelegate::ShellPlatformDelegate() = default;
 ShellPlatformDelegate::~ShellPlatformDelegate() = default;
-
-ShellPlatformDataAura* ShellPlatformDelegate::GetShellPlatformDataAura() {
-  return platform_->aura.get();
-}
 
 void ShellPlatformDelegate::Initialize(const gfx::Size& default_window_size) {
   platform_ = std::make_unique<PlatformData>();
@@ -186,6 +182,11 @@ void ShellPlatformDelegate::SetContents(Shell* shell) {
     parent->AddChild(content);
   }
   content->Show();
+
+  // The aura path never shows the host (native) window on its own -- unlike the
+  // views delegate, which calls GetHost()->Show() explicitly. Without this the
+  // BWindow stays hidden and only the desktop is visible.
+  platform_->aura->ShowWindow();
 }
 
 void ShellPlatformDelegate::ResizeWebContent(Shell* shell,
