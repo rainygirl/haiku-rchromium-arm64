@@ -73,3 +73,24 @@ This is the implementation plan; no UI code was written or built here. The work
 needs the Chromium 154 checkout in the M4 `haiku-builder` container and a running
 RENKU arm64 image. A first `shell_platform_delegate_haiku.cc` should be seeded
 against the actual 154 content_shell headers, not guessed.
+
+## Known hazard to verify: re-navigation of heavy pages
+
+From the x86 content_shell session (rchromium-native-9c, 2026-09-13): initial
+page load was made reliable (6/6), but **re-navigating the same window to a
+different heavy page** -- via `Shell::LoadURL` or the address bar -- does not
+render reliably. news.google.co.kr re-renders on re-navigation; news.naver.com
+leaves a blank screen or the previous page's content. It is not a crash.
+
+The toolbar's address field and Reload button exercise exactly this path, so
+make re-navigation an acceptance test from the start, not an afterthought:
+
+- After the toolbar works, alternate the same window between two heavy sites
+  (news.naver.com <-> news.google.co.kr) several times and confirm each load
+  actually paints, not just the first.
+- Suspect the compositor/frame-sink re-attach on navigation (see the x86 patches
+  0084 queue-early-compositor-frame-sink-requests and 0086 ignore-cancelled-
+  frame-delete for the shapes already seen) and the `HaikuContentView` re-use
+  across navigations.
+
+Catching this on arm64 first means the x86 backport does not meet it twice.
