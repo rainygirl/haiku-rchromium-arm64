@@ -11,9 +11,24 @@ window, installed on the Desktop with the blue Chromium icon, and no Qt.
 
 ## Where it actually stands (verified 2026-09-13)
 
-This is the state the repository's other docs never recorded; the port README
-in `port/README.md` stops at "`//base` builds" (early September) and is now well
-behind.
+**The native BeAPI toolbar works end to end on the RENKU arm64 VM.**
+`content_shell` (Chromium 154) renders google.com in a Haiku window under a
+hand-built toolbar drawn with BeAPI controls: icon-only Back/Forward/Reload,
+add-bookmark and show-bookmarks buttons, and an address field. Verified by
+screenshot and by driving it: typing a URL navigates (Shell::LoadURL), the
+address field tracks the current URL, Back/Forward enable-state toggles both
+ways, and re-navigation (including Back to a previously loaded page) repaints
+cleanly -- the x86 localStorage re-navigation stall does not reproduce on 154
+for these pages. Single window, no in-content views toolbar.
+
+Launch flags that work on the VM (software render, single process):
+`--ozone-platform=haiku --no-sandbox --single-process --disable-gpu
+--in-process-gpu --disable-gpu-compositing --user-data-dir=<writable>`; set
+`TMPDIR` and `LIBRARY_PATH` (including the dir holding libchromium_haiku.so) to
+a writable volume, since /boot is small.
+
+Below is the earlier bring-up state, kept for context; the port README in
+`port/README.md` stops at "`//base` builds" (early September) and is well behind.
 
 - **The full `//chrome` target builds.** Chromium **154.0.8036.0**, `target_os=
   haiku target_cpu=arm64`, produced `out/haiku-arm64/chrome` (~497 MB, 2026-09-12
@@ -98,8 +113,8 @@ The headline job is the BeAPI native UI (decided 2026-09-13). It, and the
 install/branding that follow, need the M4 container and a running RENKU arm64
 image, which are driven from other sessions.
 
-1. **Native BeAPI toolbar on content_shell (the main task, in progress).**
-   Done and compile-verified against the Chromium 154 tree (2026-09-13):
+1. **Native BeAPI toolbar on content_shell -- DONE and running on the VM
+   (2026-09-13).** Compile-verified and then verified live:
    - the toolbar itself in the shim (`haiku_shim.cc`: Back/Forward/Reload
      BButtons + address BTextControl + content-view inset) -- compiles and links
      into libchromium_haiku.so;
@@ -109,13 +124,13 @@ image, which are driven from other sessions.
    - `content/shell/browser/shell_platform_delegate_haiku.cc`, selected by
      `port-content-shell-ui.py`, turning toolbar events into GoBackOrForward/
      Reload/Stop/LoadURL and pushing address/loading/enabled state down.
-   Still to do: build a full `content_shell` (the current `out/haiku-arm64` was
-   configured for `//chrome:chrome`, so `gn gen` has to include the
-   `//content/shell:content_shell` target), replace the text button labels with
-   the HVIF icons for icon-only controls, add date-grouped searchable bookmarks,
-   and run it on the arm64 VM to verify rendering and the re-navigation hazard
-   below. Then port to the x86 (Chromium 87) repo. Full plan and the CH154-vs-CH87
-   deltas: `docs/browser-ui-plan.md`.
+   Built as a full `content_shell` (root switched from //chrome:chrome; two
+   POSIX-not-Linux fixes captured in port-content-shell-build.py) and run on the
+   VM. Buttons currently use Unicode glyphs; true HVIF icon art is still a
+   refinement. The bookmarks store/window are wired and compile, but were not
+   exercised on screen yet. Remaining under this item: HVIF icons; an on-screen
+   bookmarks test; then the x86 (Chromium 87) backport. Full plan and the
+   CH154-vs-CH87 deltas: `docs/browser-ui-plan.md`.
 2. **Brand it.** Apply `../assets/rchromium.hvif`, set the app name to R Chromium
    and a real signature, so it is not stock "Chromium".
 3. **Install into the image.** Rebuild the hpkg **zlib-compressed, not zstd**
