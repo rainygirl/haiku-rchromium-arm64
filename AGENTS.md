@@ -121,6 +121,25 @@ image, which are driven from other sessions.
 6. **Re-run a clean-checkout build** after the reconciliation above and record
    the exact `gn gen`/`ninja` invocation and revision that reproduces the binary.
 
+## Relationship to renku-arm64, and deployment
+
+This repository is the **canonical source** for the arm64 Chromium port. The
+RENKU image builder consumes a Chromium port too, and today that is a **separate
+copy** at `~/Workspace/renku-arm64/chromium/` (its `docker-build-renku-arm64.sh`
+copies that directory into the build container). The two can drift.
+
+The agreed plan (2026-09-13) resolves the drift in this order:
+
+1. Implement the native BeAPI UI here first (see `docs/browser-ui-plan.md`).
+2. Publish this repository to GitHub once the native UI works.
+3. Point renku-arm64 at the published GitHub repo -- clone or submodule in the
+   image build -- instead of its local `chromium/` copy.
+
+Until step 2, do not rewire renku-arm64. Treat this repository as the source of
+truth: any fix made in the renku-arm64 copy should be mirrored back here, not the
+other way round. `~/Workspace/renku-arm64/chromium/SOURCE.md` records the same
+intent on that side.
+
 ## Traps worth keeping
 
 - **`is_haiku` is defined out of tree on purpose.** `BUILDCONFIG.gn` asks not to
