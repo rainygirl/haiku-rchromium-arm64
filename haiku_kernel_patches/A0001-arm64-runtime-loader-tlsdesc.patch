@@ -1,0 +1,265 @@
+Subject: [arm64] runtime_loader: resolve AArch64 TLSDESC relocations
+
+clang emits R_AARCH64_TLSDESC for the general and local-dynamic TLS models on
+AArch64 and offers no way to fall back to the older __tls_get_addr sequence
+GCC uses, so without this every clang-built image with a thread_local -- which
+includes Chromium and everything libc++ -- fails to load. This adds the
+descriptor relocation, its lazy resolver (arch_tlsdesc.S), and two related
+fixes: on non-x86 a stripped .comment must not be guessed as gcc2 (that sends
+the loader to a nonexistent x86_gcc2 library subdir), and the x86-only search
+subdir logic is compiled out elsewhere.
+
+Base: haiku-renku b6c8a0a4002d (r1beta6 branch), 2026-09-06.
+Provenance: extracted from the RENKU arm64 build tree; not yet upstreamed.
+
+diff --git a/src/system/runtime_loader/arch/arm64/Jamfile b/src/system/runtime_loader/arch/arm64/Jamfile
+index 686c19f095..0746f147df 100644
+--- a/src/system/runtime_loader/arch/arm64/Jamfile
++++ b/src/system/runtime_loader/arch/arm64/Jamfile
+@@ -14,6 +14,7 @@ for architectureObject in [ MultiArchSubDirSetup arm64 ] {
+ 
+ 		StaticLibrary <$(architecture)>libruntime_loader_$(TARGET_ARCH).a :
+ 			arch_relocate.cpp
++			arch_tlsdesc.S
+ 			:
+ 			<src!system!libroot!os!arch!$(TARGET_ARCH)!$(architecture)>thread.o
+ 			<$(architecture)>posix_string_arch_$(TARGET_ARCH).o
+diff --git a/src/system/runtime_loader/arch/arm64/arch_relocate.cpp b/src/system/runtime_loader/arch/arm64/arch_relocate.cpp
+index 24fd7bbd84..5879a7dfe0 100644
+--- a/src/system/runtime_loader/arch/arm64/arch_relocate.cpp
++++ b/src/system/runtime_loader/arch/arm64/arch_relocate.cpp
+@@ -8,6 +8,7 @@
+ #include <stdlib.h>
+ 
+ #include "arch_elf.h"
++#include "elf_tls.h"
+ #include "runtime_loader_private.h"
+ 
+ #include <runtime_loader.h>
+@@ -21,6 +22,30 @@
+ #endif
+ 
+ 
++/*	The argument half of a TLS descriptor.
++
++	A descriptor is two words and the second one is ours to define, so it
++	points at this: the module whose TLS block holds the variable and the
++	offset within that block. Haiku resolves those lazily per thread, which is
++	why the pair has to survive until the first access rather than being
++	folded into an address here.
++*/
++struct tlsdesc_arg {
++	unsigned	module;
++	addr_t		offset;
++};
++
++
++extern "C" void __haiku_tlsdesc_resolve();
++
++
++extern "C" void*
++__haiku_tlsdesc_lookup(struct tlsdesc_arg* arg)
++{
++	return get_tls_address(arg->module, arg->offset);
++}
++
++
+ static status_t
+ relocate_rela(image_t* rootImage, image_t* image, Elf64_Rela* rel,
+ 	size_t relLength, SymbolLookupCache* cache)
+@@ -69,6 +94,26 @@ relocate_rela(image_t* rootImage, image_t* image, Elf64_Rela* rel,
+ 			case R_AARCH64_TLS_DTPREL64:
+ 				relocValue = symAddr;
+ 				break;
++			case R_AARCH64_TLSDESC:
++			{
++				// Two words rather than one, so this writes them itself and
++				// skips the store below. clang uses this form for the general
++				// and local dynamic models on AArch64 and offers no way to ask
++				// for the older __tls_get_addr sequence, so without it nothing
++				// built with clang that has a thread_local can be loaded.
++				struct tlsdesc_arg* arg
++					= (struct tlsdesc_arg*)malloc(sizeof(struct tlsdesc_arg));
++				if (arg == NULL)
++					return B_NO_MEMORY;
++				arg->module = symbolImage == NULL
++					? image->dso_tls_id : symbolImage->dso_tls_id;
++				arg->offset = symAddr + rel[i].r_addend;
++
++				((Elf64_Addr*)relocAddr)[0]
++					= (Elf64_Addr)&__haiku_tlsdesc_resolve;
++				((Elf64_Addr*)relocAddr)[1] = (Elf64_Addr)arg;
++				continue;
++			}
+ 			default:
+ 				TRACE(("unhandled relocation type %d\n", type));
+ 				return B_BAD_DATA;
+diff --git a/src/system/runtime_loader/elf_haiku_version.cpp b/src/system/runtime_loader/elf_haiku_version.cpp
+index 855ddce6a7..ace84dbb1a 100644
+--- a/src/system/runtime_loader/elf_haiku_version.cpp
++++ b/src/system/runtime_loader/elf_haiku_version.cpp
+@@ -247,8 +247,26 @@ analyze_image_haiku_version_and_abi(int fd, image_t* image, elf_ehdr& eheader,
+ 			FATAL("%s: Failed to get gcc version.\n", image->path);
+ 				// not really fatal, actually
+ 
++#ifdef __i386__
+ 			// assume ancient BeOS
+ 			image->abi = B_HAIKU_ABI_GCC_2_ANCIENT;
++#else
++			// gcc 2 only ever targeted 32 bit x86, so on any other
++			// architecture the image cannot be a gcc 2 one and guessing that
++			// it is does real damage. It is not only a version number:
++			// load_container() reads the major ABI back and, seeing gcc 2,
++			// points the library search at the x86_gcc2 subdirectory of every
++			// system library directory -- which does not exist here -- and
++			// picks the dependencies-only symbol resolution strategy. The
++			// result is that the image fails to load at all, reporting each
++			// of its libraries as missing.
++			//
++			// Reaching this point does not mean the image is old. It also
++			// happens for an ordinary modern binary whose .comment section
++			// has been stripped, because that section is all
++			// analyze_object_gcc_version() has to go on.
++			image->abi = B_HAIKU_ABI_GCC_4;
++#endif
+ 		}
+ 	}
+ 
+diff --git a/src/system/runtime_loader/elf_load_image.cpp b/src/system/runtime_loader/elf_load_image.cpp
+index a421f86be4..03b918898e 100644
+--- a/src/system/runtime_loader/elf_load_image.cpp
++++ b/src/system/runtime_loader/elf_load_image.cpp
+@@ -640,7 +640,10 @@ load_image(char const* name, image_type type, const char* rpath, const char* run
+ 
+ 	// If sSearchPathSubDir is unset (meaning, this is the first image we're
+ 	// loading) we init the search path subdir if the compiler version doesn't
+-	// match ours.
++	// match ours. Both subdirectories below hold x86 libraries, so this only
++	// means anything on x86; elsewhere a hit would send the loader looking
++	// for every library in a directory that cannot exist.
++#if defined(__i386__) || defined(__x86_64__)
+ 	if (sSearchPathSubDir == NULL) {
+ 		#if __GNUC__ == 2 || (defined(_COMPAT_MODE) && !defined(__x86_64__))
+ 			if ((image->abi & B_HAIKU_ABI_MAJOR) == B_HAIKU_ABI_GCC_4)
+@@ -651,6 +654,7 @@ load_image(char const* name, image_type type, const char* rpath, const char* run
+ 				sSearchPathSubDir = "x86_gcc2";
+ 		#endif
+ 	}
++#endif
+ 
+ 	set_abi_api_version(image->abi, image->api_version);
+ 
+diff --git a/src/system/runtime_loader/arch/arm64/arch_tlsdesc.S b/src/system/runtime_loader/arch/arm64/arch_tlsdesc.S
+new file mode 100644
+index 0000000000..4b01ce0743
+--- /dev/null
++++ b/src/system/runtime_loader/arch/arm64/arch_tlsdesc.S
+@@ -0,0 +1,107 @@
++/*
++ * Copyright 2026, Haiku, Inc. All Rights Reserved.
++ * Distributed under the terms of the MIT License.
++ */
++
++/*	TLS descriptor resolver.
++
++	clang emits TLSDESC relocations for the general and local dynamic TLS
++	models on AArch64; it has no option to fall back to the older
++	__tls_get_addr sequence, which is what GCC emits and what this loader
++	handled until now. The access sequence the compiler generates is
++
++		adrp	x0, :tlsdesc:var
++		ldr	x1, [x0, #:tlsdesc_lo12:var]
++		add	x0, x0, :tlsdesc_lo12:var
++		blr	x1
++		mrs	x1, tpidr_el0
++		add	x0, x1, x0
++
++	so the descriptor is two words, the loader fills in [0] with the address
++	of this function and [1] with an argument for it, and this function
++	returns in x0 the offset of the variable from the thread pointer.
++
++	Haiku allocates a thread's TLS blocks lazily, so the answer is not known
++	until the first access and this has to call into C. The calling
++	convention here is not the ordinary one: everything except x0 has to come
++	back unchanged, because the compiler assumed only x0 would be touched.
++	The C function it calls preserves the callee-saved registers on its own,
++	so what has to be saved here is the caller-saved set: x1-x18, the link
++	register, and the vector registers a C function may use.
++
++	tpidr_el0 on Haiku addresses the TLS slot array rather than an ELF thread
++	pointer, but that does not matter: the caller computes tpidr_el0 + result,
++	so returning address - tpidr_el0 lands on the variable whatever the
++	register happens to point at.
++*/
++
++#define FUNCTION(x) .global x; .type x,%function; x
++
++.text
++
++FUNCTION(__haiku_tlsdesc_resolve):
++	// Link register and frame pointer.
++	stp		x29, x30, [sp, #-16]!
++	mov		x29, sp
++
++	// Caller-saved general purpose registers, x1 through x18.
++	stp		x1, x2, [sp, #-16]!
++	stp		x3, x4, [sp, #-16]!
++	stp		x5, x6, [sp, #-16]!
++	stp		x7, x8, [sp, #-16]!
++	stp		x9, x10, [sp, #-16]!
++	stp		x11, x12, [sp, #-16]!
++	stp		x13, x14, [sp, #-16]!
++	stp		x15, x16, [sp, #-16]!
++	stp		x17, x18, [sp, #-16]!
++
++	// Caller-saved vector registers. q8-q15 are callee-saved in their low
++	// 64 bits only, but a C function that touches them saves them itself,
++	// so q0-q7 and q16-q31 are what is left to preserve here.
++	stp		q0, q1, [sp, #-32]!
++	stp		q2, q3, [sp, #-32]!
++	stp		q4, q5, [sp, #-32]!
++	stp		q6, q7, [sp, #-32]!
++	stp		q16, q17, [sp, #-32]!
++	stp		q18, q19, [sp, #-32]!
++	stp		q20, q21, [sp, #-32]!
++	stp		q22, q23, [sp, #-32]!
++	stp		q24, q25, [sp, #-32]!
++	stp		q26, q27, [sp, #-32]!
++	stp		q28, q29, [sp, #-32]!
++	stp		q30, q31, [sp, #-32]!
++
++	// x0 still holds the descriptor; the argument the loader stored is the
++	// second word.
++	ldr		x0, [x0, #8]
++	bl		__haiku_tlsdesc_lookup
++
++	// Hand back an offset from the thread pointer rather than an address.
++	mrs		x1, tpidr_el0
++	sub		x0, x0, x1
++
++	ldp		q30, q31, [sp], #32
++	ldp		q28, q29, [sp], #32
++	ldp		q26, q27, [sp], #32
++	ldp		q24, q25, [sp], #32
++	ldp		q22, q23, [sp], #32
++	ldp		q20, q21, [sp], #32
++	ldp		q18, q19, [sp], #32
++	ldp		q16, q17, [sp], #32
++	ldp		q6, q7, [sp], #32
++	ldp		q4, q5, [sp], #32
++	ldp		q2, q3, [sp], #32
++	ldp		q0, q1, [sp], #32
++
++	ldp		x17, x18, [sp], #16
++	ldp		x15, x16, [sp], #16
++	ldp		x13, x14, [sp], #16
++	ldp		x11, x12, [sp], #16
++	ldp		x9, x10, [sp], #16
++	ldp		x7, x8, [sp], #16
++	ldp		x5, x6, [sp], #16
++	ldp		x3, x4, [sp], #16
++	ldp		x1, x2, [sp], #16
++
++	ldp		x29, x30, [sp], #16
++	ret
+

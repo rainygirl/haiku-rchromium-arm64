@@ -1,0 +1,9 @@
+include_rules = [
+  "+skia/ext",
+  "+third_party/skia",
+  "+ui/base",
+  "+ui/display",
+  "+ui/events",
+  "+ui/gfx",
+  "+ui/platform_window",
+]

@@ -1,0 +1,27 @@
+name			chromium
+version			154.0.8036.0-1
+architecture	arm64
+summary			"Chromium web browser"
+description		"Chromium built for Haiku on AArch64.
+
+Ozone is the windowing backend and ANGLE is linked statically. Audio goes
+through a silent fake device until the Media Kit backend exists, and there
+is no sandbox: Haiku has no seccomp, no user namespaces and no zygote, so a
+compromised renderer reaches the same files and syscalls as the browser."
+vendor			"The Chromium Authors"
+packager		"The RENKU project"
+copyrights		{
+	"2026 The Chromium Authors"
+}
+licenses		{
+	"BSD (3-clause)"
+}
+provides {
+	chromium = 154.0.8036.0
+	app:Chromium = 154.0.8036.0
+}
+requires {
+	haiku_arm64
+	lib:libz
+	lib:libexecinfo
+}

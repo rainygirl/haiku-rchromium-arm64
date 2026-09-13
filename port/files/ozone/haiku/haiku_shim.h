@@ -1,0 +1,115 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+#ifndef UI_OZONE_PLATFORM_HAIKU_HAIKU_SHIM_H_
+#define UI_OZONE_PLATFORM_HAIKU_HAIKU_SHIM_H_
+
+// The boundary between Chromium and the BeAPI.
+//
+// Nothing on the Chromium side of this header may derive from a BeAPI class.
+// Chromium carries its own C++ runtime (libc++), and libbe is built against
+// the system one (libstdc++). The two agree on how a type_info object is laid
+// out but not on the vtable its pointer names, so when libbe runs
+// dynamic_cast -- BWindow::_DetermineTarget() does it for every message a
+// window dispatches -- it reads a Chromium subclass's type_info through
+// libstdc++'s vtable and calls the wrong virtual slot. The process dies in
+// __dynamic_cast before it draws anything.
+//
+// So the subclasses live in libchromium_haiku.so, which is built with the
+// same gcc that built libbe and therefore agrees with it about RTTI. This
+// header is all the two sides share: plain virtual interfaces, which both
+// compilers lay out identically, and no RTTI or exceptions across the line.
+
+class BBitmap;
+
+namespace haiku_shim {
+
+// Implemented by Chromium, called by the shim. Every method runs on the
+// BWindow's own thread, never on Chromium's UI thread.
+class Delegate {
+ public:
+  // `modifiers` and `buttons` are the BeAPI values, untranslated: the
+  // mapping to Chromium's event flags needs ui/events, which this side of
+  // the boundary cannot see.
+  virtual void OnMouseDown(float x,
+                           float y,
+                           unsigned int modifiers,
+                           int buttons,
+                           int clicks) = 0;
+  virtual void OnMouseUp(float x,
+                         float y,
+                         unsigned int modifiers,
+                         int buttons) = 0;
+  virtual void OnMouseMoved(float x,
+                            float y,
+                            unsigned int modifiers,
+                            int buttons,
+                            unsigned int transit) = 0;
+  virtual void OnKey(bool pressed,
+                     const char* bytes,
+                     int num_bytes,
+                     unsigned int modifiers) = 0;
+  virtual void OnViewResized(float width, float height) = 0;
+  virtual void OnQuitRequested() = 0;
+  virtual void OnActivated(bool active) = 0;
+  virtual void OnFrameMoved(float x, float y, float width, float height) = 0;
+
+ protected:
+  // Not virtual on purpose: the shim never owns or destroys a delegate.
+  ~Delegate() {}
+};
+
+// Implemented by the shim, called by Chromium from any thread. Each method
+// takes the window's lock itself. The names carry a Window suffix so that
+// none of them accidentally overrides a BWindow virtual of the same shape in
+// the implementation, which inherits from both.
+class NativeWindow {
+ public:
+  virtual void ShowWindow(bool inactive) = 0;
+  virtual void HideWindow() = 0;
+  virtual void SetWindowBounds(float x, float y, float width, float height) = 0;
+  // Writes x, y, width, height.
+  virtual void GetWindowFrame(float out_xywh[4]) = 0;
+  virtual void SetWindowTitle(const char* utf8) = 0;
+  virtual void ZoomWindow() = 0;
+  virtual void MinimizeWindow(bool minimize) = 0;
+  virtual void ActivateWindow(bool active) = 0;
+  // Takes ownership of `bitmap` and drops the one the view held.
+  virtual void PresentBitmap(BBitmap* bitmap,
+                       float x,
+                       float y,
+                       float width,
+                       float height) = 0;
+  // Quits the window thread, which deletes the BWindow and this object with
+  // it. No delegate call can arrive after this returns.
+  virtual void DestroyWindow() = 0;
+
+ protected:
+  ~NativeWindow() {}
+};
+
+extern "C" {
+
+// Starts the BApplication if it is not running, and returns once be_app is
+// set. Safe to call more than once. BWindow's constructor requires be_app, so
+// this has to happen before any window is built.
+void HaikuShimEnsureApp();
+
+// Builds the window and its view and leaves the window hidden and running on
+// its own thread.
+NativeWindow* HaikuShimCreateWindow(float x,
+                              float y,
+                              float width,
+                              float height,
+                              bool has_frame,
+                              Delegate* delegate);
+
+// The main screen's frame, as x, y, width, height.
+void HaikuShimScreenFrame(float out_xywh[4]);
+
+}  // extern "C"
+
+}  // namespace haiku_shim
+
+#endif  // UI_OZONE_PLATFORM_HAIKU_HAIKU_SHIM_H_

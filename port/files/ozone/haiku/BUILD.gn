@@ -1,0 +1,56 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+visibility = [ "//ui/ozone/*" ]
+
+source_set("haiku") {
+  sources = [
+    "client_native_pixmap_factory_haiku.cc",
+    "client_native_pixmap_factory_haiku.h",
+    "haiku_app.cc",
+    "haiku_app.h",
+    "haiku_screen.cc",
+    "haiku_screen.h",
+    "haiku_surface_factory.cc",
+    "haiku_surface_factory.h",
+    "haiku_beapi.cc",
+    "haiku_beapi.h",
+    "haiku_shim.h",
+    "haiku_window.cc",
+    "haiku_window.h",
+    "haiku_window_manager.cc",
+    "haiku_window_manager.h",
+    "ozone_platform_haiku.cc",
+    "ozone_platform_haiku.h",
+  ]
+
+  defines = [ "OZONE_IMPLEMENTATION" ]
+
+  deps = [
+    "//base",
+    "//skia",
+    "//ui/base",
+    "//ui/base/cursor",
+    "//ui/base/ime",
+    "//ui/display",
+    "//ui/events",
+    "//ui/events/ozone/layout",
+    "//ui/events/platform",
+    "//ui/gfx/geometry",
+    "//ui/ozone:ozone_base",
+    "//ui/ozone/common",
+    "//ui/platform_window",
+  ]
+
+  # The BeAPI: BBitmap and BScreen live in libbe. libchromium_haiku holds the
+  # BView and BWindow subclasses; it is built separately, with the gcc that
+  # built libbe, because Chromium's libc++ and the system libstdc++ disagree
+  # about the vtable a type_info points at and libbe runs dynamic_cast on
+  # every window message. See haiku_shim.h.
+  libs = [
+    "be",
+    "chromium_haiku",
+  ]
+}
+

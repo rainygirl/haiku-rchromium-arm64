@@ -1,0 +1,2237 @@
+diff --git a/.gn b/.gn
+index 488189e60c..0a02596d04 100644
+--- a/.gn
++++ b/.gn
+@@ -182,3 +182,8 @@ expand_directory_allowlist =
+       # Requires to enumerate policy template yaml files.
+       "//components/policy/BUILD.gn",
+     ]
++
++# The default root is //:gn_all, which pulls in every test target Chromium
++# has. A port has no use for those yet -- and they carry hundreds of their own
++# platform assumptions -- so aim the graph at the browser itself.
++root = "//chrome:chrome"
+diff --git a/build/build_config.h b/build/build_config.h
+index 0e3bcb4558..c496830be8 100644
+--- a/build/build_config.h
++++ b/build/build_config.h
+@@ -120,6 +120,8 @@
+ #define OS_ASMJS 1
+ #elif defined(__MVS__)
+ #define OS_ZOS 1
++#elif defined(__HAIKU__)
++#define OS_HAIKU 1
+ #else
+ #error Please add support for your platform in build/build_config.h
+ #endif
+@@ -142,7 +144,7 @@
+     defined(OS_FREEBSD) || defined(OS_IOS) || defined(OS_LINUX) ||   \
+     defined(OS_CHROMEOS) || defined(OS_MAC) || defined(OS_NETBSD) || \
+     defined(OS_OPENBSD) || defined(OS_QNX) || defined(OS_SOLARIS) || \
+-    defined(OS_ZOS)
++    defined(OS_ZOS) || defined(OS_HAIKU)
+ #define OS_POSIX 1
+ #endif
+ 
+@@ -195,6 +197,12 @@
+ #define BUILDFLAG_INTERNAL_IS_FUCHSIA() (0)
+ #endif
+ 
++#if defined(OS_HAIKU)
++#define BUILDFLAG_INTERNAL_IS_HAIKU() (1)
++#else
++#define BUILDFLAG_INTERNAL_IS_HAIKU() (0)
++#endif
++
+ #if defined(OS_IOS)
+ #define BUILDFLAG_INTERNAL_IS_IOS() (1)
+ #else
+diff --git a/build/config/BUILDCONFIG.gn b/build/config/BUILDCONFIG.gn
+index 538bb3d729..d1dff769c3 100644
+--- a/build/config/BUILDCONFIG.gn
++++ b/build/config/BUILDCONFIG.gn
+@@ -291,6 +291,8 @@ if (target_os == "android") {
+   assert(target_cpu == "x86" || target_cpu == "x64" || target_cpu == "arm" ||
+          target_cpu == "arm64")
+   _default_toolchain = "//build/toolchain/win:uwp_$target_cpu"
++} else if (target_os == "haiku") {
++  _default_toolchain = "//build/toolchain/haiku:clang_$target_cpu"
+ } else if (target_os == "aix") {
+   _default_toolchain = "//build/toolchain/aix:$target_cpu"
+ } else if (target_os == "zos") {
+@@ -341,6 +343,8 @@ is_wasm = current_os == "emscripten"
+ is_watchos = current_os == "watchos"
+ is_win = current_os == "win" || current_os == "winuwp"
+ 
++is_haiku = current_os == "haiku"
++
+ is_apple = is_ios || is_mac || is_watchos
+ is_posix = !is_win && !is_fuchsia
+ 
+diff --git a/build/config/clang/BUILD.gn b/build/config/clang/BUILD.gn
+index b99148a538..7d62700123 100644
+--- a/build/config/clang/BUILD.gn
++++ b/build/config/clang/BUILD.gn
+@@ -171,7 +171,7 @@ group("llvm-symbolizer_data") {
+ }
+ 
+ template("clang_lib") {
+-  if (!defined(invoker.libname) || is_wasm) {
++  if (!defined(invoker.libname) || is_wasm || is_haiku) {
+     not_needed(invoker, "*")
+     config(target_name) {
+     }
+diff --git a/build/config/compiler_cpu_abi.gn b/build/config/compiler_cpu_abi.gn
+index ae62bab587..af1a780bfc 100644
+--- a/build/config/compiler_cpu_abi.gn
++++ b/build/config/compiler_cpu_abi.gn
+@@ -83,7 +83,11 @@ if ((is_posix && !is_apple) || is_fuchsia) {
+       "-mfloat-abi=$arm_float_abi",
+     ]
+   } else if (current_cpu == "arm64") {
+-    if (is_clang && !is_android && !is_fuchsia && !is_chromeos_device) {
++    if (is_haiku) {
++      cpu_abi_cflags += [ "--target=aarch64-unknown-haiku" ]
++      cpu_abi_ldflags += [ "--target=aarch64-unknown-haiku" ]
++    } else if (is_clang && !is_android && !is_fuchsia &&
++               !is_chromeos_device) {
+       cpu_abi_cflags += [ "--target=aarch64-linux-gnu" ]
+       cpu_abi_ldflags += [ "--target=aarch64-linux-gnu" ]
+     }
+diff --git a/build/config/haiku/BUILD.gn b/build/config/haiku/BUILD.gn
+new file mode 100644
+index 0000000000..c157291970
+--- /dev/null
++++ b/build/config/haiku/BUILD.gn
+@@ -0,0 +1,28 @@
++# Copyright 2026 The RENKU project
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++import("//build/config/haiku/haiku.gni")
++
++# Haiku's headers are not laid out the way any other POSIX system's are:
++# every kit has its own directory, and the gnu and bsd directories wrap the
++# POSIX ones with #include_next, so they must come first. A Haiku-configured
++# compiler already knows all of this through --with-sysroot, so nothing is
++# added here for the native case; only a cross build needs to be told.
++config("sdk") {
++  if (haiku_sysroot != "") {
++    cflags = [ "--sysroot=$haiku_sysroot" ]
++    ldflags = [ "--sysroot=$haiku_sysroot" ]
++  }
++
++  # Haiku hides its BSD and GNU extensions -- memrchr, strchrnul,
++  # pthread_getattr_np -- behind _DEFAULT_SOURCE, and anything that defines
++  # _POSIX_C_SOURCE or _XOPEN_SOURCE turns that off.
++  defines = [ "_DEFAULT_SOURCE" ]
++}
++
++# Haiku's C library is libroot; there is no separate libpthread, librt, libdl
++# or libm to link.
++config("runtime_library") {
++  libs = [ "root" ]
++}
+diff --git a/build/config/haiku/haiku.gni b/build/config/haiku/haiku.gni
+new file mode 100644
+index 0000000000..539eb20ea8
+--- /dev/null
++++ b/build/config/haiku/haiku.gni
+@@ -0,0 +1,13 @@
++# Copyright 2026 The RENKU project
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++declare_args() {
++  # Prefix for the Haiku cross toolchain, when building on a non-Haiku host.
++  # Empty when building natively on Haiku, where the tools are unprefixed.
++  haiku_toolprefix = "aarch64-unknown-haiku-"
++
++  # Root of a Haiku sysroot: the directory holding boot/system/develop.
++  # Empty means build natively against the running system.
++  haiku_sysroot = ""
++}
+diff --git a/build/config/ozone.gni b/build/config/ozone.gni
+index f75adeef2d..b70a0dd4b0 100644
+--- a/build/config/ozone.gni
++++ b/build/config/ozone.gni
+@@ -8,7 +8,7 @@ import("//build/toolchain/toolchain.gni")
+ declare_args() {
+   # Indicates if Ozone is enabled. Ozone is a low-level library layer for Linux
+   # that does not require X11.
+-  use_ozone = is_chromeos || is_fuchsia || is_linux
++  use_ozone = is_chromeos || is_fuchsia || is_linux || is_haiku
+ }
+ 
+ declare_args() {
+diff --git a/build/config/rust.gni b/build/config/rust.gni
+index 3b5db82dd1..17f1f8edfd 100644
+--- a/build/config/rust.gni
++++ b/build/config/rust.gni
+@@ -323,6 +323,19 @@ if (is_linux || is_chromeos) {
+   } else {
+     assert(false, "Architecture not supported")
+   }
++} else if (current_os == "haiku") {
++  if (current_cpu == "x64") {
++    rust_abi_target = "x86_64-unknown-haiku"
++  } else if (current_cpu == "x86") {
++    rust_abi_target = "i686-unknown-haiku"
++  } else if (current_cpu == "arm64") {
++    # Not an upstream Rust target: added by chromium/rust/, which patches
++    # rustc with a spec for it and builds a std. Use a rustc built that way,
++    # or this fails at link time with "can't find crate for `std`".
++    rust_abi_target = "aarch64-unknown-haiku"
++  } else {
++    assert(false, "no Rust Haiku target for $current_cpu")
++  }
+ } else if (is_mac) {
+   if (current_cpu == "arm64") {
+     rust_abi_target = "aarch64-apple-darwin"
+diff --git a/build/config/ui.gni b/build/config/ui.gni
+index 9b879a7e4c..826879993c 100644
+--- a/build/config/ui.gni
++++ b/build/config/ui.gni
+@@ -24,12 +24,13 @@ import("//build/config/ozone.gni")
+ declare_args() {
+   # Indicates if Aura is enabled. Aura is a low-level windowing library, sort
+   # of a replacement for GDI or GTK.
+-  use_aura = is_win || is_linux || is_chromeos || is_fuchsia
++  use_aura = is_win || is_linux || is_chromeos || is_fuchsia || is_haiku
+ }
+ 
+ declare_args() {
+   # True means the UI is built using the "views" framework.
+-  toolkit_views = is_mac || is_win || is_linux || is_chromeos || is_fuchsia
++  toolkit_views =
++      is_mac || is_win || is_linux || is_chromeos || is_fuchsia || is_haiku
+ 
+   use_glib = is_linux && !is_castos &&
+              # Avoid the need for glib when Android is building things via
+diff --git a/build/modules/BUILD.gn b/build/modules/BUILD.gn
+index 479c5bb865..1d682045fa 100644
+--- a/build/modules/BUILD.gn
++++ b/build/modules/BUILD.gn
+@@ -103,6 +103,8 @@ if (use_unified_system_module) {
+     extra_headers += [ ":mac_sysroot(${default_toolchain})" ]
+   } else if (is_linux || is_mac || is_android || is_chromeos) {
+     root_include_dir = "usr/include"
++  } else if (is_haiku) {
++    root_include_dir = "boot/system/develop/headers"
+   } else if (is_fuchsia) {
+     root_include_dir = "include"
+   } else {
+diff --git a/build/rust/known-target-triples.txt b/build/rust/known-target-triples.txt
+index fc4780bf65..c9791fd817 100644
+--- a/build/rust/known-target-triples.txt
++++ b/build/rust/known-target-triples.txt
+@@ -1,12 +1,11 @@
+-# This file lists all target triples (as spelled/expected by `rustc`) that
+-# Chromium supports when building Rust libraries.
+ #
++# Chromium supports when building Rust libraries.
+ # Contents of this file are manually built, by trying to list all possible
+-# values of `rust_abi_target` as set in  `//build/config/rust.gni`.
+-#
++# GN equivalents.
++# This file lists all target triples (as spelled/expected by `rustc`) that
+ # `gnrt`'s `build.rs` uses this file to ask `rustc` how to translate Rust's
+ # conditional dependency expressions (e.g. `#[cfg(target_env = "msvc")]`) into
+-# GN equivalents.
++# values of `rust_abi_target` as set in  `//build/config/rust.gni`.
+ aarch64-apple-darwin
+ aarch64-apple-ios
+ aarch64-apple-ios-macabi
+@@ -16,10 +15,11 @@ aarch64-apple-tvos-sim
+ aarch64-linux-android
+ aarch64-pc-windows-msvc
+ aarch64-unknown-fuchsia
++aarch64-unknown-haiku
+ aarch64-unknown-linux-gnu
+-arm64e-apple-ios
+ arm-unknown-linux-gnueabi
+ arm-unknown-linux-gnueabihf
++arm64e-apple-ios
+ armv7-linux-androideabi
+ armv7-unknown-linux-gnueabi
+ armv7-unknown-linux-gnueabihf
+@@ -27,10 +27,13 @@ armv7s-apple-ios
+ i386-apple-ios
+ i686-linux-android
+ i686-pc-windows-msvc
++i686-unknown-haiku
+ i686-unknown-linux-gnu
+ loongarch64-unknown-linux-gnu
++powerpc64le-unknown-linux-gnu
+ riscv64-linux-android
+ riscv64gc-unknown-linux-gnu
++s390x-unknown-linux-gnu
+ thumbv7neon-linux-androideabi
+ thumbv7neon-unknown-linux-gnueabihf
+ x86_64-apple-darwin
+@@ -40,6 +43,5 @@ x86_64-apple-tvos
+ x86_64-linux-android
+ x86_64-pc-windows-msvc
+ x86_64-unknown-fuchsia
++x86_64-unknown-haiku
+ x86_64-unknown-linux-gnu
+-powerpc64le-unknown-linux-gnu
+-s390x-unknown-linux-gnu
+diff --git a/build/rust/std/rules/BUILD.gn b/build/rust/std/rules/BUILD.gn
+index 8b9c6abb0f..ae859c0e7f 100644
+--- a/build/rust/std/rules/BUILD.gn
++++ b/build/rust/std/rules/BUILD.gn
+@@ -386,9 +386,6 @@ cargo_crate("compiler_builtins") {
+     "//third_party/rust-toolchain/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins/src/../../libm/src/math/acosf.rs",
+     "//third_party/rust-toolchain/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins/src/../../libm/src/math/acosh.rs",
+     "//third_party/rust-toolchain/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins/src/../../libm/src/math/acoshf.rs",
+-    "//third_party/rust-toolchain/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins/src/../../libm/src/math/approx/cbrtf64.rs",
+-    "//third_party/rust-toolchain/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins/src/../../libm/src/math/approx/hypot.rs",
+-    "//third_party/rust-toolchain/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins/src/../../libm/src/math/approx/mod.rs",
+     "//third_party/rust-toolchain/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins/src/../../libm/src/math/arch/aarch64/fma.rs",
+     "//third_party/rust-toolchain/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins/src/../../libm/src/math/arch/aarch64/mod.rs",
+     "//third_party/rust-toolchain/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins/src/../../libm/src/math/arch/aarch64/rounding.rs",
+@@ -3148,7 +3145,6 @@ cargo_crate("std") {
+     "//third_party/rust-toolchain/lib/rustlib/src/rust/library/std/src/sys/thread_local/native/mod.rs",
+     "//third_party/rust-toolchain/lib/rustlib/src/rust/library/std/src/sys/thread_local/no_threads.rs",
+     "//third_party/rust-toolchain/lib/rustlib/src/rust/library/std/src/sys/thread_local/os.rs",
+-    "//third_party/rust-toolchain/lib/rustlib/src/rust/library/std/src/sys/time/hermit.rs",
+     "//third_party/rust-toolchain/lib/rustlib/src/rust/library/std/src/sys/time/mod.rs",
+     "//third_party/rust-toolchain/lib/rustlib/src/rust/library/std/src/sys/time/sgx.rs",
+     "//third_party/rust-toolchain/lib/rustlib/src/rust/library/std/src/sys/time/solid.rs",
+diff --git a/build/toolchain/haiku/BUILD.gn b/build/toolchain/haiku/BUILD.gn
+new file mode 100644
+index 0000000000..17b1cfe6d7
+--- /dev/null
++++ b/build/toolchain/haiku/BUILD.gn
+@@ -0,0 +1,51 @@
++# Copyright 2026 The RENKU project
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++#
++# Toolchains for building Chromium against Haiku.
++#
++# Both the native case (building on Haiku with the clang from the image) and
++# the cross case (building on Linux with the Haiku cross toolchain) go through
++# clang_toolchain; they differ only in the tool prefix, which
++# //build/config/haiku:haiku_toolprefix supplies.
++
++import("//build/config/haiku/haiku.gni")
++import("//build/toolchain/gcc_toolchain.gni")
++
++clang_toolchain("clang_arm64") {
++  toolchain_args = {
++    current_cpu = "arm64"
++    current_os = "haiku"
++  }
++}
++
++clang_toolchain("clang_x64") {
++  toolchain_args = {
++    current_cpu = "x64"
++    current_os = "haiku"
++  }
++}
++
++# The Haiku cross toolchain is gcc-based; it is the only compiler that can
++# build for Haiku from a Linux host without first bootstrapping clang, so it
++# stays available as a fallback.
++gcc_toolchain("arm64") {
++  toolprefix = haiku_toolprefix
++
++  cc = "${toolprefix}gcc"
++  cxx = "${toolprefix}g++"
++
++  ar = "${toolprefix}ar"
++  ld = cxx
++  readelf = "${toolprefix}readelf"
++  nm = "${toolprefix}nm"
++
++  toolchain_args = {
++    current_cpu = "arm64"
++    current_os = "haiku"
++
++    # Remote execution does not support gcc.
++    use_remoteexec = false
++    is_clang = false
++  }
++}
+diff --git a/chrome/browser/ai/BUILD.gn b/chrome/browser/ai/BUILD.gn
+index e3f037f156..ad71ff28ad 100644
+--- a/chrome/browser/ai/BUILD.gn
++++ b/chrome/browser/ai/BUILD.gn
+@@ -7,7 +7,7 @@ import("//components/optimization_guide/features.gni")
+ import("//pdf/features.gni")
+ 
+ assert(build_with_model_execution)
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("ai") {
+   sources = [
+diff --git a/chrome/browser/chooser_controller/BUILD.gn b/chrome/browser/chooser_controller/BUILD.gn
+index 55f44d2a1d..217558946e 100644
+--- a/chrome/browser/chooser_controller/BUILD.gn
++++ b/chrome/browser/chooser_controller/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//extensions/buildflags/buildflags.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("chooser_controller") {
+   sources = [
+diff --git a/chrome/browser/commerce/BUILD.gn b/chrome/browser/commerce/BUILD.gn
+index 6943877c92..b40c11e748 100644
+--- a/chrome/browser/commerce/BUILD.gn
++++ b/chrome/browser/commerce/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("commerce") {
+   sources = [ "shopping_service_factory.h" ]
+diff --git a/chrome/browser/companion/text_finder/BUILD.gn b/chrome/browser/companion/text_finder/BUILD.gn
+index 9b8770822b..59981c60cc 100644
+--- a/chrome/browser/companion/text_finder/BUILD.gn
++++ b/chrome/browser/companion/text_finder/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("text_finder") {
+   sources = [
+diff --git a/chrome/browser/content_settings/BUILD.gn b/chrome/browser/content_settings/BUILD.gn
+index 39f6890e48..87a4e6dec6 100644
+--- a/chrome/browser/content_settings/BUILD.gn
++++ b/chrome/browser/content_settings/BUILD.gn
+@@ -7,7 +7,7 @@ import("//content/public/common/features.gni")
+ import("//extensions/buildflags/buildflags.gni")
+ import("//pdf/features.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("content_settings") {
+   sources = [
+diff --git a/chrome/browser/download/bubble/BUILD.gn b/chrome/browser/download/bubble/BUILD.gn
+index 971c9f5918..450880be84 100644
+--- a/chrome/browser/download/bubble/BUILD.gn
++++ b/chrome/browser/download/bubble/BUILD.gn
+@@ -3,7 +3,7 @@
+ # found in the LICENSE file.
+ 
+ # The download bubble UI is desktop-only.
+-assert(is_win || is_mac || is_linux)
++assert(is_win || is_mac || is_linux || is_haiku)
+ 
+ source_set("bubble") {
+   public = [
+diff --git a/chrome/browser/feedback/BUILD.gn b/chrome/browser/feedback/BUILD.gn
+index 67ae002529..3ff52a7470 100644
+--- a/chrome/browser/feedback/BUILD.gn
++++ b/chrome/browser/feedback/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//build/config/ui.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("feedback_enum") {
+   sources = [ "public/feedback_source.h" ]
+diff --git a/chrome/browser/file_system_access/BUILD.gn b/chrome/browser/file_system_access/BUILD.gn
+index e8c3d657ce..3ead253cee 100644
+--- a/chrome/browser/file_system_access/BUILD.gn
++++ b/chrome/browser/file_system_access/BUILD.gn
+@@ -7,7 +7,7 @@ import("//components/guest_view/buildflags/buildflags.gni")
+ import("//components/safe_browsing/buildflags.gni")
+ import("//extensions/buildflags/buildflags.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("file_system_access") {
+   sources = [
+diff --git a/chrome/browser/hid/BUILD.gn b/chrome/browser/hid/BUILD.gn
+index 70cf05cf57..540922344a 100644
+--- a/chrome/browser/hid/BUILD.gn
++++ b/chrome/browser/hid/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//extensions/buildflags/buildflags.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("hid") {
+   public = [
+diff --git a/chrome/browser/image_editor/BUILD.gn b/chrome/browser/image_editor/BUILD.gn
+index eb9ecb29c1..af3d49abce 100644
+--- a/chrome/browser/image_editor/BUILD.gn
++++ b/chrome/browser/image_editor/BUILD.gn
+@@ -3,7 +3,7 @@
+ # found in the LICENSE file.
+ import("//build/config/ui.gni")
+ 
+-assert(is_chromeos || is_linux || is_mac || is_win,
++assert(is_chromeos || is_linux || is_mac || is_win || is_haiku,
+        "Image Editor is for desktop plaforms only")
+ assert(!is_fuchsia, "Fuchsia shouldn't use anything in //chrome")
+ 
+diff --git a/chrome/browser/importer/BUILD.gn b/chrome/browser/importer/BUILD.gn
+index 08b67eb41e..0698a3bc52 100644
+--- a/chrome/browser/importer/BUILD.gn
++++ b/chrome/browser/importer/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("importer") {
+   sources = [
+diff --git a/chrome/browser/lookalikes/BUILD.gn b/chrome/browser/lookalikes/BUILD.gn
+index f7b531696b..c27a9dcc08 100644
+--- a/chrome/browser/lookalikes/BUILD.gn
++++ b/chrome/browser/lookalikes/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("lookalikes") {
+   sources = [
+diff --git a/chrome/browser/manta/BUILD.gn b/chrome/browser/manta/BUILD.gn
+index 59c5168b00..3b1fe0069d 100644
+--- a/chrome/browser/manta/BUILD.gn
++++ b/chrome/browser/manta/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("manta") {
+   public = [ "manta_service_factory.h" ]
+diff --git a/chrome/browser/media/webrtc/BUILD.gn b/chrome/browser/media/webrtc/BUILD.gn
+index c62e2daa90..01d022e905 100644
+--- a/chrome/browser/media/webrtc/BUILD.gn
++++ b/chrome/browser/media/webrtc/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ import("//build/config/ozone.gni")
+ import("//build/config/ui.gni")
+diff --git a/chrome/browser/memory/BUILD.gn b/chrome/browser/memory/BUILD.gn
+index 0359789b49..fe98699bc2 100644
+--- a/chrome/browser/memory/BUILD.gn
++++ b/chrome/browser/memory/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("memory") {
+   public = [
+diff --git a/chrome/browser/navigation_predictor/BUILD.gn b/chrome/browser/navigation_predictor/BUILD.gn
+index 600d14c567..9da5e92a12 100644
+--- a/chrome/browser/navigation_predictor/BUILD.gn
++++ b/chrome/browser/navigation_predictor/BUILD.gn
+@@ -3,7 +3,7 @@
+ # found in the LICENSE file.
+ import("//build/config/features.gni")
+ import("//net/features.gni")
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("navigation_predictor") {
+   sources = [
+diff --git a/chrome/browser/optimization_guide/BUILD.gn b/chrome/browser/optimization_guide/BUILD.gn
+index 6c17948b84..ce515589f0 100644
+--- a/chrome/browser/optimization_guide/BUILD.gn
++++ b/chrome/browser/optimization_guide/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("optimization_guide") {
+   sources = [
+diff --git a/chrome/browser/picture_in_picture/BUILD.gn b/chrome/browser/picture_in_picture/BUILD.gn
+index 98f3c45098..9bc05fbb43 100644
+--- a/chrome/browser/picture_in_picture/BUILD.gn
++++ b/chrome/browser/picture_in_picture/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//chrome/common/features.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ # The window occlusion logic is currently for desktop only, and the
+ # WebContentsObserver-based implementation does not work on Linux
+diff --git a/chrome/browser/predictors/BUILD.gn b/chrome/browser/predictors/BUILD.gn
+index cc771a480c..a582909ca2 100644
+--- a/chrome/browser/predictors/BUILD.gn
++++ b/chrome/browser/predictors/BUILD.gn
+@@ -5,7 +5,7 @@
+ import("//extensions/buildflags/buildflags.gni")
+ import("//third_party/protobuf/proto_library.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ proto_library("resource_prefetch_predictor_proto") {
+   sources = [ "resource_prefetch_predictor.proto" ]
+diff --git a/chrome/browser/predictors/lcp_critical_path_predictor/BUILD.gn b/chrome/browser/predictors/lcp_critical_path_predictor/BUILD.gn
+index d4cde215f7..8f1bf187f7 100644
+--- a/chrome/browser/predictors/lcp_critical_path_predictor/BUILD.gn
++++ b/chrome/browser/predictors/lcp_critical_path_predictor/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//third_party/protobuf/proto_library.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ proto_library("lcp_critical_path_predictor_proto") {
+   sources = [ "lcp_critical_path_predictor.proto" ]
+diff --git a/chrome/browser/prefs/BUILD.gn b/chrome/browser/prefs/BUILD.gn
+index 2122b050ed..6dad16cce1 100644
+--- a/chrome/browser/prefs/BUILD.gn
++++ b/chrome/browser/prefs/BUILD.gn
+@@ -10,7 +10,7 @@ import("//extensions/buildflags/buildflags.gni")
+ import("//pdf/features.gni")
+ import("//rlz/buildflags/buildflags.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("prefs") {
+   sources = [
+diff --git a/chrome/browser/preloading/prefetch/no_state_prefetch/BUILD.gn b/chrome/browser/preloading/prefetch/no_state_prefetch/BUILD.gn
+index 31ff7086aa..95a47edabf 100644
+--- a/chrome/browser/preloading/prefetch/no_state_prefetch/BUILD.gn
++++ b/chrome/browser/preloading/prefetch/no_state_prefetch/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//extensions/buildflags/buildflags.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("no_state_prefetch") {
+   sources = [
+diff --git a/chrome/browser/record_replay/BUILD.gn b/chrome/browser/record_replay/BUILD.gn
+index 22086245f9..4f0a43bde2 100644
+--- a/chrome/browser/record_replay/BUILD.gn
++++ b/chrome/browser/record_replay/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//third_party/protobuf/proto_library.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ group("record_replay") {
+   public_deps = [ "//components/record_replay/content/browser" ]
+diff --git a/chrome/browser/reduce_accept_language/BUILD.gn b/chrome/browser/reduce_accept_language/BUILD.gn
+index 0aa3162780..6828f2d956 100644
+--- a/chrome/browser/reduce_accept_language/BUILD.gn
++++ b/chrome/browser/reduce_accept_language/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//chrome/common/features.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("reduce_accept_language") {
+   sources = [ "reduce_accept_language_factory.h" ]
+diff --git a/chrome/browser/regional_capabilities/BUILD.gn b/chrome/browser/regional_capabilities/BUILD.gn
+index cea4e49109..17a6c3a3f2 100644
+--- a/chrome/browser/regional_capabilities/BUILD.gn
++++ b/chrome/browser/regional_capabilities/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//build/config/chrome_build.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("regional_capabilities") {
+   sources = [
+diff --git a/chrome/browser/resources/app_home/BUILD.gn b/chrome/browser/resources/app_home/BUILD.gn
+index 83834c55c4..dd84bed031 100644
+--- a/chrome/browser/resources/app_home/BUILD.gn
++++ b/chrome/browser/resources/app_home/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//ui/webui/resources/tools/build_webui.gni")
+ 
+-assert(is_win || is_mac || is_linux)
++assert(is_win || is_mac || is_linux || is_haiku)
+ 
+ build_webui("build") {
+   grd_prefix = "app_home"
+diff --git a/chrome/browser/resources/signin/history_sync_optin/BUILD.gn b/chrome/browser/resources/signin/history_sync_optin/BUILD.gn
+index bae4b80128..3ef978eb77 100644
+--- a/chrome/browser/resources/signin/history_sync_optin/BUILD.gn
++++ b/chrome/browser/resources/signin/history_sync_optin/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//ui/webui/resources/tools/build_webui.gni")
+ 
+-assert(is_win || is_mac || is_linux)
++assert(is_win || is_mac || is_linux || is_haiku)
+ 
+ build_webui("build") {
+   ts_composite = true
+diff --git a/chrome/browser/resources/tab_search/BUILD.gn b/chrome/browser/resources/tab_search/BUILD.gn
+index cf5cf0a153..880c6d2eaf 100644
+--- a/chrome/browser/resources/tab_search/BUILD.gn
++++ b/chrome/browser/resources/tab_search/BUILD.gn
+@@ -7,7 +7,7 @@ import("//ui/webui/resources/tools/build_webui.gni")
+ import("//ui/webui/resources/tools/generate_grd.gni")
+ import("//ui/webui/webui_features.gni")
+ 
+-assert(is_linux || is_chromeos || is_win || is_mac)
++assert(is_linux || is_chromeos || is_win || is_mac || is_haiku)
+ 
+ build_webui("build") {
+   grd_prefix = "tab_search"
+diff --git a/chrome/browser/search/BUILD.gn b/chrome/browser/search/BUILD.gn
+index 81fb954031..5fdaa1401d 100644
+--- a/chrome/browser/search/BUILD.gn
++++ b/chrome/browser/search/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//ui/webui/webui_features.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("search") {
+   sources = [
+diff --git a/chrome/browser/search/background/BUILD.gn b/chrome/browser/search/background/BUILD.gn
+index e763f5f6bc..62c4ffb672 100644
+--- a/chrome/browser/search/background/BUILD.gn
++++ b/chrome/browser/search/background/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ import("//third_party/protobuf/proto_library.gni")
+ 
+diff --git a/chrome/browser/search_engine_choice/BUILD.gn b/chrome/browser/search_engine_choice/BUILD.gn
+index aa877399a5..090e33d066 100644
+--- a/chrome/browser/search_engine_choice/BUILD.gn
++++ b/chrome/browser/search_engine_choice/BUILD.gn
+@@ -5,7 +5,7 @@
+ import("//build/config/chrome_build.gni")
+ import("//build/config/chromeos/args.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("search_engine_choice") {
+   sources = [ "search_engine_choice_service_factory.h" ]
+diff --git a/chrome/browser/search_engines/BUILD.gn b/chrome/browser/search_engines/BUILD.gn
+index 2fd1bcc2af..98ce871eb2 100644
+--- a/chrome/browser/search_engines/BUILD.gn
++++ b/chrome/browser/search_engines/BUILD.gn
+@@ -5,7 +5,7 @@
+ import("//extensions/buildflags/buildflags.gni")
+ import("//rlz/buildflags/buildflags.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("search_engines") {
+   public = [
+diff --git a/chrome/browser/sharing_hub/BUILD.gn b/chrome/browser/sharing_hub/BUILD.gn
+index 4fd856933b..efea6a9f0a 100644
+--- a/chrome/browser/sharing_hub/BUILD.gn
++++ b/chrome/browser/sharing_hub/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("sharing_hub") {
+   sources = [
+diff --git a/chrome/browser/sync/BUILD.gn b/chrome/browser/sync/BUILD.gn
+index fbfe3393ea..9eb63c5da1 100644
+--- a/chrome/browser/sync/BUILD.gn
++++ b/chrome/browser/sync/BUILD.gn
+@@ -7,7 +7,7 @@ import("//components/spellcheck/spellcheck_build_features.gni")
+ import("//components/supervised_user/buildflags.gni")
+ import("//extensions/buildflags/buildflags.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("sync") {
+   sources = [
+diff --git a/chrome/browser/themes/BUILD.gn b/chrome/browser/themes/BUILD.gn
+index 68bb9154f5..9040e96f47 100644
+--- a/chrome/browser/themes/BUILD.gn
++++ b/chrome/browser/themes/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//extensions/buildflags/buildflags.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("themes") {
+   public = [
+diff --git a/chrome/browser/ttc/resources/BUILD.gn b/chrome/browser/ttc/resources/BUILD.gn
+index 599148e9e7..ac732b9839 100644
+--- a/chrome/browser/ttc/resources/BUILD.gn
++++ b/chrome/browser/ttc/resources/BUILD.gn
+@@ -5,7 +5,7 @@
+ import("//build/config/chrome_build.gni")
+ import("//ui/webui/resources/tools/build_webui.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_desktop_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_desktop_android || is_haiku)
+ 
+ action("generate_tool_definitions") {
+   script = "tools/generate_tool_definitions.py"
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+index 3d73737e06..14b36e32e8 100644
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -2150,7 +2150,7 @@ static_library("ui") {
+     }
+   }
+ 
+-  if (is_win || is_mac || is_linux || is_chromeos) {
++  if (is_win || is_mac || is_linux || is_chromeos || is_haiku) {
+     sources += [
+       "views/profiles/incognito_menu_view.cc",
+       "views/profiles/incognito_menu_view.h",
+diff --git a/chrome/browser/ui/ai_overlay_dialog/BUILD.gn b/chrome/browser/ui/ai_overlay_dialog/BUILD.gn
+index 390610603d..b2eb5c59d2 100644
+--- a/chrome/browser/ui/ai_overlay_dialog/BUILD.gn
++++ b/chrome/browser/ui/ai_overlay_dialog/BUILD.gn
+@@ -5,7 +5,7 @@
+ import("//build/config/chrome_build.gni")
+ import("//build/config/ui.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_desktop_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_desktop_android || is_haiku)
+ 
+ source_set("ai_overlay_dialog") {
+   sources = [
+diff --git a/chrome/browser/ui/animation/BUILD.gn b/chrome/browser/ui/animation/BUILD.gn
+index 6ed1b422e3..2e8916e781 100644
+--- a/chrome/browser/ui/animation/BUILD.gn
++++ b/chrome/browser/ui/animation/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("animation") {
+   public = [
+diff --git a/chrome/browser/ui/apps/BUILD.gn b/chrome/browser/ui/apps/BUILD.gn
+index 60282a79f1..a6fd411824 100644
+--- a/chrome/browser/ui/apps/BUILD.gn
++++ b/chrome/browser/ui/apps/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//printing/buildflags/buildflags.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("apps") {
+   sources = [
+diff --git a/chrome/browser/ui/autofill/BUILD.gn b/chrome/browser/ui/autofill/BUILD.gn
+index ed24ad5b6e..504aa5d2d3 100644
+--- a/chrome/browser/ui/autofill/BUILD.gn
++++ b/chrome/browser/ui/autofill/BUILD.gn
+@@ -12,7 +12,7 @@ if (is_android) {
+   import("//build/config/android/rules.gni")
+ }
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ if (is_android) {
+   java_cpp_enum("autofill_ai_ui_java_enums") {
+diff --git a/chrome/browser/ui/autofill/payments/BUILD.gn b/chrome/browser/ui/autofill/payments/BUILD.gn
+index c2cfc463f8..3b08086898 100644
+--- a/chrome/browser/ui/autofill/payments/BUILD.gn
++++ b/chrome/browser/ui/autofill/payments/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//build/config/ui.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("payments") {
+   sources = [
+diff --git a/chrome/browser/ui/blocked_content/BUILD.gn b/chrome/browser/ui/blocked_content/BUILD.gn
+index a06e5596d2..6beabff17e 100644
+--- a/chrome/browser/ui/blocked_content/BUILD.gn
++++ b/chrome/browser/ui/blocked_content/BUILD.gn
+@@ -6,7 +6,7 @@ import("//build/config/chromeos/args.gni")
+ import("//build/config/ozone.gni")
+ import("//extensions/buildflags/buildflags.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("blocked_content") {
+   sources = [
+diff --git a/chrome/browser/ui/bluetooth/BUILD.gn b/chrome/browser/ui/bluetooth/BUILD.gn
+index ebc382e97d..fd5f5fb229 100644
+--- a/chrome/browser/ui/bluetooth/BUILD.gn
++++ b/chrome/browser/ui/bluetooth/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("bluetooth") {
+   sources = [ "bluetooth_dialogs.h" ]
+diff --git a/chrome/browser/ui/bookmarks/BUILD.gn b/chrome/browser/ui/bookmarks/BUILD.gn
+index b7e930f581..3a2fcce748 100644
+--- a/chrome/browser/ui/bookmarks/BUILD.gn
++++ b/chrome/browser/ui/bookmarks/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("bookmarks") {
+   sources = [
+diff --git a/chrome/browser/ui/commerce/BUILD.gn b/chrome/browser/ui/commerce/BUILD.gn
+index 7e0eb7be46..739dbc0eb7 100644
+--- a/chrome/browser/ui/commerce/BUILD.gn
++++ b/chrome/browser/ui/commerce/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("commerce") {
+   sources = [
+diff --git a/chrome/browser/ui/content_settings/BUILD.gn b/chrome/browser/ui/content_settings/BUILD.gn
+index 3ef9262a8d..efd66fadaf 100644
+--- a/chrome/browser/ui/content_settings/BUILD.gn
++++ b/chrome/browser/ui/content_settings/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("content_settings") {
+   sources = []
+diff --git a/chrome/browser/ui/contextual_search/BUILD.gn b/chrome/browser/ui/contextual_search/BUILD.gn
+index 61814f69e9..13b4e8e183 100644
+--- a/chrome/browser/ui/contextual_search/BUILD.gn
++++ b/chrome/browser/ui/contextual_search/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//pdf/features.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("contextual_search") {
+   sources = [
+diff --git a/chrome/browser/ui/cookie_controls/BUILD.gn b/chrome/browser/ui/cookie_controls/BUILD.gn
+index c4f82f8df1..9a59121381 100644
+--- a/chrome/browser/ui/cookie_controls/BUILD.gn
++++ b/chrome/browser/ui/cookie_controls/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("unit_tests") {
+   testonly = true
+diff --git a/chrome/browser/ui/download/BUILD.gn b/chrome/browser/ui/download/BUILD.gn
+index 81933e190d..4b01d748a3 100644
+--- a/chrome/browser/ui/download/BUILD.gn
++++ b/chrome/browser/ui/download/BUILD.gn
+@@ -3,7 +3,7 @@
+ # found in the LICENSE file.
+ 
+ # Download bubble UI is not used on ChromeOS.
+-assert(is_win || is_mac || is_linux)
++assert(is_win || is_mac || is_linux || is_haiku)
+ 
+ source_set("download_display") {
+   public = [ "download_display.h" ]
+diff --git a/chrome/browser/ui/exclusive_access/BUILD.gn b/chrome/browser/ui/exclusive_access/BUILD.gn
+index d4c575fb3e..a147ee3e47 100644
+--- a/chrome/browser/ui/exclusive_access/BUILD.gn
++++ b/chrome/browser/ui/exclusive_access/BUILD.gn
+@@ -6,7 +6,7 @@ import("//build/config/chromeos/args.gni")
+ import("//build/config/ozone.gni")
+ import("//extensions/buildflags/buildflags.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("exclusive_access") {
+   sources = [
+diff --git a/chrome/browser/ui/file_system_access/BUILD.gn b/chrome/browser/ui/file_system_access/BUILD.gn
+index d156143edb..3f853eb811 100644
+--- a/chrome/browser/ui/file_system_access/BUILD.gn
++++ b/chrome/browser/ui/file_system_access/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//components/safe_browsing/buildflags.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("file_system_access") {
+   sources = [
+diff --git a/chrome/browser/ui/find_bar/BUILD.gn b/chrome/browser/ui/find_bar/BUILD.gn
+index 191396857c..a3bc5d06e6 100644
+--- a/chrome/browser/ui/find_bar/BUILD.gn
++++ b/chrome/browser/ui/find_bar/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//build/config/chromeos/args.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("find_bar") {
+   sources = [
+diff --git a/chrome/browser/ui/frame/BUILD.gn b/chrome/browser/ui/frame/BUILD.gn
+index 112da4dbc5..8e721db566 100644
+--- a/chrome/browser/ui/frame/BUILD.gn
++++ b/chrome/browser/ui/frame/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("frame") {
+   public = [ "window_frame_util.h" ]
+diff --git a/chrome/browser/ui/global_error/BUILD.gn b/chrome/browser/ui/global_error/BUILD.gn
+index 03f1e7ec6b..86d554c477 100644
+--- a/chrome/browser/ui/global_error/BUILD.gn
++++ b/chrome/browser/ui/global_error/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("global_error") {
+   sources = [
+diff --git a/chrome/browser/ui/global_media_controls/BUILD.gn b/chrome/browser/ui/global_media_controls/BUILD.gn
+index 1c01466e40..529bd1696b 100644
+--- a/chrome/browser/ui/global_media_controls/BUILD.gn
++++ b/chrome/browser/ui/global_media_controls/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//chrome/common/features.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("global_media_controls") {
+   sources = [
+diff --git a/chrome/browser/ui/hats/BUILD.gn b/chrome/browser/ui/hats/BUILD.gn
+index 3d5faaff30..54d804e979 100644
+--- a/chrome/browser/ui/hats/BUILD.gn
++++ b/chrome/browser/ui/hats/BUILD.gn
+@@ -8,7 +8,7 @@ if (is_android) {
+   import("//build/config/android/rules.gni")
+ }
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("hats") {
+   sources = [
+diff --git a/chrome/browser/ui/hung_renderer/BUILD.gn b/chrome/browser/ui/hung_renderer/BUILD.gn
+index 09043b4d8e..881578d101 100644
+--- a/chrome/browser/ui/hung_renderer/BUILD.gn
++++ b/chrome/browser/ui/hung_renderer/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//build/config/chromeos/args.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("hung_renderer") {
+   sources = [
+diff --git a/chrome/browser/ui/javascript_dialogs/BUILD.gn b/chrome/browser/ui/javascript_dialogs/BUILD.gn
+index 6959b0982b..219ef84877 100644
+--- a/chrome/browser/ui/javascript_dialogs/BUILD.gn
++++ b/chrome/browser/ui/javascript_dialogs/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("javascript_dialogs") {
+   sources = [
+diff --git a/chrome/browser/ui/login/BUILD.gn b/chrome/browser/ui/login/BUILD.gn
+index 00df23c27a..69943578a7 100644
+--- a/chrome/browser/ui/login/BUILD.gn
++++ b/chrome/browser/ui/login/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//extensions/buildflags/buildflags.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("login") {
+   sources = [
+diff --git a/chrome/browser/ui/media_router/BUILD.gn b/chrome/browser/ui/media_router/BUILD.gn
+index 78079abda2..650b7dc734 100644
+--- a/chrome/browser/ui/media_router/BUILD.gn
++++ b/chrome/browser/ui/media_router/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("media_router") {
+   sources = [
+diff --git a/chrome/browser/ui/omnibox/BUILD.gn b/chrome/browser/ui/omnibox/BUILD.gn
+index 4f3166b3c7..093a1d032b 100644
+--- a/chrome/browser/ui/omnibox/BUILD.gn
++++ b/chrome/browser/ui/omnibox/BUILD.gn
+@@ -5,7 +5,7 @@
+ import("//build/config/chromeos/args.gni")
+ import("//ui/webui/webui_features.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ # The public interface has no circular dependencies.
+ source_set("omnibox") {
+diff --git a/chrome/browser/ui/page_action/BUILD.gn b/chrome/browser/ui/page_action/BUILD.gn
+index 3d0fbc0284..b863463c51 100644
+--- a/chrome/browser/ui/page_action/BUILD.gn
++++ b/chrome/browser/ui/page_action/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("icon_type") {
+   sources = [ "page_action_icon_type.h" ]
+diff --git a/chrome/browser/ui/page_info/BUILD.gn b/chrome/browser/ui/page_info/BUILD.gn
+index c563bf6c51..61d4a376f0 100644
+--- a/chrome/browser/ui/page_info/BUILD.gn
++++ b/chrome/browser/ui/page_info/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("page_info") {
+   sources = [
+diff --git a/chrome/browser/ui/permission_bubble/BUILD.gn b/chrome/browser/ui/permission_bubble/BUILD.gn
+index f5a7b55d91..688b3fb371 100644
+--- a/chrome/browser/ui/permission_bubble/BUILD.gn
++++ b/chrome/browser/ui/permission_bubble/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("permission_bubble") {
+   sources = [ "permission_prompt.h" ]
+diff --git a/chrome/browser/ui/prefs/BUILD.gn b/chrome/browser/ui/prefs/BUILD.gn
+index e08d23ef86..7552598ff2 100644
+--- a/chrome/browser/ui/prefs/BUILD.gn
++++ b/chrome/browser/ui/prefs/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//extensions/buildflags/buildflags.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("prefs") {
+   sources = [
+diff --git a/chrome/browser/ui/qrcode_generator/BUILD.gn b/chrome/browser/ui/qrcode_generator/BUILD.gn
+index fb523b6efa..f49aca67a7 100644
+--- a/chrome/browser/ui/qrcode_generator/BUILD.gn
++++ b/chrome/browser/ui/qrcode_generator/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//build/config/ui.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ assert(toolkit_views)
+ 
+ source_set("qrcode_generator") {
+diff --git a/chrome/browser/ui/read_anything/BUILD.gn b/chrome/browser/ui/read_anything/BUILD.gn
+index 2a0de5df77..106680bb9a 100644
+--- a/chrome/browser/ui/read_anything/BUILD.gn
++++ b/chrome/browser/ui/read_anything/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ import("//build/config/compiler/compiler.gni")
+ import("//chrome/common/features.gni")
+diff --git a/chrome/browser/ui/safety_hub/BUILD.gn b/chrome/browser/ui/safety_hub/BUILD.gn
+index 68764880ab..a40b77c95d 100644
+--- a/chrome/browser/ui/safety_hub/BUILD.gn
++++ b/chrome/browser/ui/safety_hub/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//extensions/buildflags/buildflags.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("safety_hub") {
+   sources = [
+diff --git a/chrome/browser/ui/send_tab_to_self/BUILD.gn b/chrome/browser/ui/send_tab_to_self/BUILD.gn
+index 036f0b13f2..0cf0d3e1a1 100644
+--- a/chrome/browser/ui/send_tab_to_self/BUILD.gn
++++ b/chrome/browser/ui/send_tab_to_self/BUILD.gn
+@@ -5,7 +5,7 @@
+ import("//build/config/ozone.gni")
+ import("//build/config/ui.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ assert(toolkit_views)
+ 
+ source_set("send_tab_to_self") {
+diff --git a/chrome/browser/ui/shared_highlighting/BUILD.gn b/chrome/browser/ui/shared_highlighting/BUILD.gn
+index e82971c2c7..e857cbf85f 100644
+--- a/chrome/browser/ui/shared_highlighting/BUILD.gn
++++ b/chrome/browser/ui/shared_highlighting/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("shared_highlighting") {
+   sources = [
+diff --git a/chrome/browser/ui/sharing_hub/BUILD.gn b/chrome/browser/ui/sharing_hub/BUILD.gn
+index b5f1bcba77..353e622e23 100644
+--- a/chrome/browser/ui/sharing_hub/BUILD.gn
++++ b/chrome/browser/ui/sharing_hub/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//build/config/ui.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ assert(toolkit_views)
+ 
+ source_set("sharing_hub") {
+diff --git a/chrome/browser/ui/startup/default_browser_prompt/BUILD.gn b/chrome/browser/ui/startup/default_browser_prompt/BUILD.gn
+index 8b5a4b2df3..9f330f9299 100644
+--- a/chrome/browser/ui/startup/default_browser_prompt/BUILD.gn
++++ b/chrome/browser/ui/startup/default_browser_prompt/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux,
++assert(is_win || is_mac || is_linux || is_haiku,
+        "Default browser prompts exist only on non-Chromeos desktop platforms")
+ 
+ source_set("default_browser_prompt") {
+diff --git a/chrome/browser/ui/tab_contents/BUILD.gn b/chrome/browser/ui/tab_contents/BUILD.gn
+index 7f2c5c2262..5142e5ef3c 100644
+--- a/chrome/browser/ui/tab_contents/BUILD.gn
++++ b/chrome/browser/ui/tab_contents/BUILD.gn
+@@ -5,7 +5,7 @@
+ import("//components/enterprise/buildflags/buildflags.gni")
+ import("//extensions/buildflags/buildflags.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("tab_contents") {
+   sources = [
+diff --git a/chrome/browser/ui/tabs/BUILD.gn b/chrome/browser/ui/tabs/BUILD.gn
+index 0e5530e212..071b114491 100644
+--- a/chrome/browser/ui/tabs/BUILD.gn
++++ b/chrome/browser/ui/tabs/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ import("//chrome/common/features.gni")
+ 
+diff --git a/chrome/browser/ui/tabs/alert/BUILD.gn b/chrome/browser/ui/tabs/alert/BUILD.gn
+index 8fc0df1563..45a51af459 100644
+--- a/chrome/browser/ui/tabs/alert/BUILD.gn
++++ b/chrome/browser/ui/tabs/alert/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ import("//chrome/common/features.gni")
+ 
+diff --git a/chrome/browser/ui/tabs/saved_tab_groups/BUILD.gn b/chrome/browser/ui/tabs/saved_tab_groups/BUILD.gn
+index 204ad876af..457b2f23d3 100644
+--- a/chrome/browser/ui/tabs/saved_tab_groups/BUILD.gn
++++ b/chrome/browser/ui/tabs/saved_tab_groups/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ import("//chrome/common/features.gni")
+ 
+diff --git a/chrome/browser/ui/toasts/BUILD.gn b/chrome/browser/ui/toasts/BUILD.gn
+index e45c27af4a..ead2999941 100644
+--- a/chrome/browser/ui/toasts/BUILD.gn
++++ b/chrome/browser/ui/toasts/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ import("//build/config/chrome_build.gni")
+ import("//build/config/ui.gni")
+diff --git a/chrome/browser/ui/toolbar/cast/BUILD.gn b/chrome/browser/ui/toolbar/cast/BUILD.gn
+index 317ac1eed1..71b841ca1e 100644
+--- a/chrome/browser/ui/toolbar/cast/BUILD.gn
++++ b/chrome/browser/ui/toolbar/cast/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("cast") {
+   sources = [
+diff --git a/chrome/browser/ui/user_education/BUILD.gn b/chrome/browser/ui/user_education/BUILD.gn
+index 2c21a61da7..1f5c4e709a 100644
+--- a/chrome/browser/ui/user_education/BUILD.gn
++++ b/chrome/browser/ui/user_education/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//build/config/chromeos/args.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ # This is the public interface for the user education service.
+ source_set("user_education") {
+diff --git a/chrome/browser/ui/views/BUILD.gn b/chrome/browser/ui/views/BUILD.gn
+index 7426fcbcb3..9360b0a79a 100644
+--- a/chrome/browser/ui/views/BUILD.gn
++++ b/chrome/browser/ui/views/BUILD.gn
+@@ -389,7 +389,7 @@ if (is_win || is_linux || is_chromeos) {
+   }
+ }
+ 
+-if (is_win || is_mac || is_linux || is_chromeos) {
++if (is_win || is_mac || is_linux || is_chromeos || is_haiku) {
+   source_set("close_bubble_on_tab_activation_helper") {
+     public = [ "close_bubble_on_tab_activation_helper.h" ]
+     sources = [ "close_bubble_on_tab_activation_helper.cc" ]
+diff --git a/chrome/browser/ui/views/animations/BUILD.gn b/chrome/browser/ui/views/animations/BUILD.gn
+index 32f7cd14b0..a1d47da170 100644
+--- a/chrome/browser/ui/views/animations/BUILD.gn
++++ b/chrome/browser/ui/views/animations/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("animations") {
+   sources = [
+diff --git a/chrome/browser/ui/views/app_menu/BUILD.gn b/chrome/browser/ui/views/app_menu/BUILD.gn
+index 481d99b4da..db2377d3d6 100644
+--- a/chrome/browser/ui/views/app_menu/BUILD.gn
++++ b/chrome/browser/ui/views/app_menu/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ import("//build/config/ui.gni")
+ 
+diff --git a/chrome/browser/ui/views/autofill/BUILD.gn b/chrome/browser/ui/views/autofill/BUILD.gn
+index f6648e8be1..b389b30e84 100644
+--- a/chrome/browser/ui/views/autofill/BUILD.gn
++++ b/chrome/browser/ui/views/autofill/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//components/signin/features.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("delete_address_profile_dialog_view") {
+   sources = [ "delete_address_profile_dialog_view.cc" ]
+diff --git a/chrome/browser/ui/views/autofill/autofill_ai/BUILD.gn b/chrome/browser/ui/views/autofill/autofill_ai/BUILD.gn
+index af44bea22a..a3b991337d 100644
+--- a/chrome/browser/ui/views/autofill/autofill_ai/BUILD.gn
++++ b/chrome/browser/ui/views/autofill/autofill_ai/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("autofill_ai") {
+   public = [
+diff --git a/chrome/browser/ui/views/autofill/payments/BUILD.gn b/chrome/browser/ui/views/autofill/payments/BUILD.gn
+index e112c342f7..efbdd13e68 100644
+--- a/chrome/browser/ui/views/autofill/payments/BUILD.gn
++++ b/chrome/browser/ui/views/autofill/payments/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("dialog_view_ids") {
+   public = [ "dialog_view_ids.h" ]
+diff --git a/chrome/browser/ui/views/autofill/popup/email_verifier/BUILD.gn b/chrome/browser/ui/views/autofill/popup/email_verifier/BUILD.gn
+index 32a050a6f5..69c1712159 100644
+--- a/chrome/browser/ui/views/autofill/popup/email_verifier/BUILD.gn
++++ b/chrome/browser/ui/views/autofill/popup/email_verifier/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("email_verifier") {
+   public = [ "email_verification_popup_view.h" ]
+diff --git a/chrome/browser/ui/views/bubble/BUILD.gn b/chrome/browser/ui/views/bubble/BUILD.gn
+index 6d07eef1b6..e25ebec541 100644
+--- a/chrome/browser/ui/views/bubble/BUILD.gn
++++ b/chrome/browser/ui/views/bubble/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ import("//build/config/ui.gni")
+ 
+diff --git a/chrome/browser/ui/views/contextual_tasks/BUILD.gn b/chrome/browser/ui/views/contextual_tasks/BUILD.gn
+index 43e040dde2..1d7f73f6a6 100644
+--- a/chrome/browser/ui/views/contextual_tasks/BUILD.gn
++++ b/chrome/browser/ui/views/contextual_tasks/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD - style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("contextual_tasks") {
+   sources = [
+diff --git a/chrome/browser/ui/views/data_sharing/BUILD.gn b/chrome/browser/ui/views/data_sharing/BUILD.gn
+index f5149668be..9db7a93015 100644
+--- a/chrome/browser/ui/views/data_sharing/BUILD.gn
++++ b/chrome/browser/ui/views/data_sharing/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//build/config/ui.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ assert(toolkit_views)
+ 
+ source_set("data_sharing") {
+diff --git a/chrome/browser/ui/views/download/BUILD.gn b/chrome/browser/ui/views/download/BUILD.gn
+index 76d3a65bb6..7524d9e437 100644
+--- a/chrome/browser/ui/views/download/BUILD.gn
++++ b/chrome/browser/ui/views/download/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD - style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("download") {
+   sources = [
+diff --git a/chrome/browser/ui/views/hats/BUILD.gn b/chrome/browser/ui/views/hats/BUILD.gn
+index 7fc7aa683d..338ef66e54 100644
+--- a/chrome/browser/ui/views/hats/BUILD.gn
++++ b/chrome/browser/ui/views/hats/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("hats") {
+   public = [ "hats_next_web_dialog.h" ]
+diff --git a/chrome/browser/ui/views/location_bar/BUILD.gn b/chrome/browser/ui/views/location_bar/BUILD.gn
+index 8ec3b04f08..3b0947b86d 100644
+--- a/chrome/browser/ui/views/location_bar/BUILD.gn
++++ b/chrome/browser/ui/views/location_bar/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ import("//build/config/ozone.gni")
+ import("//build/config/ui.gni")
+diff --git a/chrome/browser/ui/views/location_bar/cookie_controls/BUILD.gn b/chrome/browser/ui/views/location_bar/cookie_controls/BUILD.gn
+index 20e22a3110..e03c428de3 100644
+--- a/chrome/browser/ui/views/location_bar/cookie_controls/BUILD.gn
++++ b/chrome/browser/ui/views/location_bar/cookie_controls/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//build/config/ui.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("cookie_controls") {
+   sources = []
+diff --git a/chrome/browser/ui/views/media_preview/BUILD.gn b/chrome/browser/ui/views/media_preview/BUILD.gn
+index 16d55362e0..95623d6833 100644
+--- a/chrome/browser/ui/views/media_preview/BUILD.gn
++++ b/chrome/browser/ui/views/media_preview/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux)
++assert(is_win || is_mac || is_linux || is_haiku)
+ 
+ source_set("media_preview") {
+   public = [
+diff --git a/chrome/browser/ui/views/media_preview/camera_preview/BUILD.gn b/chrome/browser/ui/views/media_preview/camera_preview/BUILD.gn
+index 90f1a6eaf3..7f08a0dfae 100644
+--- a/chrome/browser/ui/views/media_preview/camera_preview/BUILD.gn
++++ b/chrome/browser/ui/views/media_preview/camera_preview/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux)
++assert(is_win || is_mac || is_linux || is_haiku)
+ 
+ source_set("camera_preview") {
+   public = [
+diff --git a/chrome/browser/ui/views/media_preview/mic_preview/BUILD.gn b/chrome/browser/ui/views/media_preview/mic_preview/BUILD.gn
+index e9a579c112..1a816892df 100644
+--- a/chrome/browser/ui/views/media_preview/mic_preview/BUILD.gn
++++ b/chrome/browser/ui/views/media_preview/mic_preview/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux)
++assert(is_win || is_mac || is_linux || is_haiku)
+ 
+ source_set("mic_preview") {
+   public = [
+diff --git a/chrome/browser/ui/views/profiles/BUILD.gn b/chrome/browser/ui/views/profiles/BUILD.gn
+index 9f5fc17cbb..6f279115f4 100644
+--- a/chrome/browser/ui/views/profiles/BUILD.gn
++++ b/chrome/browser/ui/views/profiles/BUILD.gn
+@@ -21,7 +21,7 @@ if (is_chromeos) {
+   }
+ }
+ 
+-if (is_win || is_mac || is_linux || is_chromeos) {
++if (is_win || is_mac || is_linux || is_chromeos || is_haiku) {
+   source_set("avatar_badge_view") {
+     public = [ "avatar_badge_view.h" ]
+     sources = [ "avatar_badge_view.cc" ]
+@@ -205,7 +205,7 @@ if (toolkit_views) {
+   }
+ }
+ 
+-if (is_win || is_mac || is_linux) {
++if (is_win || is_mac || is_linux || is_haiku) {
+   source_set("badged_profile_photo") {
+     public = [ "badged_profile_photo.h" ]
+     sources = [ "badged_profile_photo.cc" ]
+diff --git a/chrome/browser/ui/views/relaunch_notification/BUILD.gn b/chrome/browser/ui/views/relaunch_notification/BUILD.gn
+index 209b31f613..f5c7a5156f 100644
+--- a/chrome/browser/ui/views/relaunch_notification/BUILD.gn
++++ b/chrome/browser/ui/views/relaunch_notification/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//chrome/browser/buildflags.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("relaunch_notification") {
+   public = [
+diff --git a/chrome/browser/ui/views/send_tab_to_self/BUILD.gn b/chrome/browser/ui/views/send_tab_to_self/BUILD.gn
+index ba4c73cff1..5fd2354c74 100644
+--- a/chrome/browser/ui/views/send_tab_to_self/BUILD.gn
++++ b/chrome/browser/ui/views/send_tab_to_self/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("send_tab_to_self") {
+   public = [
+diff --git a/chrome/browser/ui/views/side_panel/BUILD.gn b/chrome/browser/ui/views/side_panel/BUILD.gn
+index eedffc77fb..0c5fa9a414 100644
+--- a/chrome/browser/ui/views/side_panel/BUILD.gn
++++ b/chrome/browser/ui/views/side_panel/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD - style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ import("//chrome/common/features.gni")
+ import("//extensions/buildflags/buildflags.gni")
+diff --git a/chrome/browser/ui/views/toolbar/BUILD.gn b/chrome/browser/ui/views/toolbar/BUILD.gn
+index 25eaf429ee..ddf47603d0 100644
+--- a/chrome/browser/ui/views/toolbar/BUILD.gn
++++ b/chrome/browser/ui/views/toolbar/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ import("//build/config/ui.gni")
+ import("//ui/webui/webui_features.gni")
+diff --git a/chrome/browser/ui/webui/BUILD.gn b/chrome/browser/ui/webui/BUILD.gn
+index 914c97f1a4..097f07484f 100644
+--- a/chrome/browser/ui/webui/BUILD.gn
++++ b/chrome/browser/ui/webui/BUILD.gn
+@@ -669,7 +669,7 @@ if (enable_extensions_core) {
+   }
+ }
+ 
+-if (is_win || is_mac || is_linux) {
++if (is_win || is_mac || is_linux || is_haiku) {
+   source_set("profile_helper") {
+     sources = [ "profile_helper.cc" ]
+     public = [ "profile_helper.h" ]
+diff --git a/chrome/browser/ui/webui/about/BUILD.gn b/chrome/browser/ui/webui/about/BUILD.gn
+index aa17f4f820..d6ffd89f7c 100644
+--- a/chrome/browser/ui/webui/about/BUILD.gn
++++ b/chrome/browser/ui/webui/about/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//ui/webui/webui_features.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("about") {
+   sources = [ "about_ui.h" ]
+diff --git a/chrome/browser/ui/webui/accessibility/BUILD.gn b/chrome/browser/ui/webui/accessibility/BUILD.gn
+index 39668e4e30..7ef061a886 100644
+--- a/chrome/browser/ui/webui/accessibility/BUILD.gn
++++ b/chrome/browser/ui/webui/accessibility/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("accessibility") {
+   sources = [ "accessibility_ui.h" ]
+diff --git a/chrome/browser/ui/webui/ai_overlay_dialog/BUILD.gn b/chrome/browser/ui/webui/ai_overlay_dialog/BUILD.gn
+index 17cba35fbd..1dd2e35463 100644
+--- a/chrome/browser/ui/webui/ai_overlay_dialog/BUILD.gn
++++ b/chrome/browser/ui/webui/ai_overlay_dialog/BUILD.gn
+@@ -5,7 +5,7 @@
+ import("//build/config/chrome_build.gni")
+ import("//mojo/public/tools/bindings/mojom.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_desktop_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_desktop_android || is_haiku)
+ 
+ mojom("mojo_bindings") {
+   sources = [
+diff --git a/chrome/browser/ui/webui/app_home/BUILD.gn b/chrome/browser/ui/webui/app_home/BUILD.gn
+index ded23dc20b..c7f0b82447 100644
+--- a/chrome/browser/ui/webui/app_home/BUILD.gn
++++ b/chrome/browser/ui/webui/app_home/BUILD.gn
+@@ -5,7 +5,7 @@
+ import("//extensions/buildflags/buildflags.gni")
+ import("//mojo/public/tools/bindings/mojom.gni")
+ 
+-assert(is_win || is_mac || is_linux)
++assert(is_win || is_mac || is_linux || is_haiku)
+ 
+ mojom("mojo_bindings") {
+   sources = [ "app_home.mojom" ]
+diff --git a/chrome/browser/ui/webui/app_management/BUILD.gn b/chrome/browser/ui/webui/app_management/BUILD.gn
+index 311e433966..93ad87b146 100644
+--- a/chrome/browser/ui/webui/app_management/BUILD.gn
++++ b/chrome/browser/ui/webui/app_management/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("app_management") {
+   sources = [
+diff --git a/chrome/browser/ui/webui/intro/BUILD.gn b/chrome/browser/ui/webui/intro/BUILD.gn
+index 5be258f80a..df45694aa1 100644
+--- a/chrome/browser/ui/webui/intro/BUILD.gn
++++ b/chrome/browser/ui/webui/intro/BUILD.gn
+@@ -16,7 +16,7 @@ mojom("mojo_bindings") {
+   webui_module_path = "/"
+ }
+ 
+-if (is_win || is_mac || is_linux) {
++if (is_win || is_mac || is_linux || is_haiku) {
+   source_set("intro") {
+     sources = [
+       "finish_or_continue_handler.cc",
+diff --git a/chrome/browser/ui/webui/organizer_panel/BUILD.gn b/chrome/browser/ui/webui/organizer_panel/BUILD.gn
+index 89be79b31a..83a9955ff8 100644
+--- a/chrome/browser/ui/webui/organizer_panel/BUILD.gn
++++ b/chrome/browser/ui/webui/organizer_panel/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_linux || is_chromeos || is_win || is_mac)
++assert(is_linux || is_chromeos || is_win || is_mac || is_haiku)
+ assert(!is_fuchsia, "Fuchsia shouldn't use anything in //chrome")
+ 
+ source_set("organizer_panel") {
+diff --git a/chrome/browser/ui/webui/safe_browsing/BUILD.gn b/chrome/browser/ui/webui/safe_browsing/BUILD.gn
+index dca19f26e0..a95d03d120 100644
+--- a/chrome/browser/ui/webui/safe_browsing/BUILD.gn
++++ b/chrome/browser/ui/webui/safe_browsing/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("safe_browsing") {
+   sources = [
+diff --git a/chrome/browser/ui/webui/settings/BUILD.gn b/chrome/browser/ui/webui/settings/BUILD.gn
+index 9c9878f645..0912b3918c 100644
+--- a/chrome/browser/ui/webui/settings/BUILD.gn
++++ b/chrome/browser/ui/webui/settings/BUILD.gn
+@@ -6,7 +6,7 @@ import("//build/config/ozone.gni")
+ import("//build/config/ui.gni")
+ import("//components/signin/features.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("settings") {
+   sources = [
+diff --git a/chrome/browser/ui/webui/signin/history_sync_optin/BUILD.gn b/chrome/browser/ui/webui/signin/history_sync_optin/BUILD.gn
+index 86cb680353..76ca63b872 100644
+--- a/chrome/browser/ui/webui/signin/history_sync_optin/BUILD.gn
++++ b/chrome/browser/ui/webui/signin/history_sync_optin/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//mojo/public/tools/bindings/mojom.gni")
+ 
+-assert(is_win || is_mac || is_linux)
++assert(is_win || is_mac || is_linux || is_haiku)
+ 
+ mojom("mojo_bindings") {
+   sources = [ "history_sync_optin.mojom" ]
+diff --git a/chrome/browser/ui/webui/tab_search/BUILD.gn b/chrome/browser/ui/webui/tab_search/BUILD.gn
+index a756be9f35..5234b01148 100644
+--- a/chrome/browser/ui/webui/tab_search/BUILD.gn
++++ b/chrome/browser/ui/webui/tab_search/BUILD.gn
+@@ -5,7 +5,7 @@
+ import("//mojo/public/tools/bindings/mojom.gni")
+ import("//ui/webui/webui_features.gni")
+ 
+-assert(is_linux || is_chromeos || is_win || is_mac)
++assert(is_linux || is_chromeos || is_win || is_mac || is_haiku)
+ assert(!is_fuchsia, "Fuchsia shouldn't use anything in //chrome")
+ 
+ mojom("mojo_bindings") {
+diff --git a/chrome/browser/ui/webui/util/BUILD.gn b/chrome/browser/ui/webui/util/BUILD.gn
+index ec820d7f77..e8c07b1bb5 100644
+--- a/chrome/browser/ui/webui/util/BUILD.gn
++++ b/chrome/browser/ui/webui/util/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//ui/webui/webui_features.gni")
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ source_set("util") {
+   public = [
+diff --git a/chrome/browser/ui/zoom/BUILD.gn b/chrome/browser/ui/zoom/BUILD.gn
+index 8ae23e1aef..0b67ecc4a6 100644
+--- a/chrome/browser/ui/zoom/BUILD.gn
++++ b/chrome/browser/ui/zoom/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos || is_android)
++assert(is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku)
+ 
+ source_set("zoom") {
+   sources = [
+diff --git a/chrome/common/features.gni b/chrome/common/features.gni
+index 7c9f12727c..25b8e67762 100644
+--- a/chrome/common/features.gni
++++ b/chrome/common/features.gni
+@@ -40,7 +40,7 @@ declare_args() {
+   # supported on all desktop platforms, as opposed to the v1 UI which is only
+   # supported on platforms using NSS (Linux and CrOS).
+   chrome_root_store_cert_management_ui =
+-      is_win || is_mac || is_linux || is_chromeos
++      is_win || is_mac || is_linux || is_chromeos || is_haiku
+ 
+   # Enables support for background apps.
+   enable_background_contents = !is_android
+diff --git a/chrome/services/speech/buildflags/buildflags.gni b/chrome/services/speech/buildflags/buildflags.gni
+index 5d4b3e4188..79bbbeb885 100644
+--- a/chrome/services/speech/buildflags/buildflags.gni
++++ b/chrome/services/speech/buildflags/buildflags.gni
+@@ -11,7 +11,7 @@ import("//build/config/chrome_build.gni")
+ declare_args() {
+   # Whether the browser provides a speech recognition service
+   # (//media/mojo/mojom/speech_recognition_service.mojom) to the renderer.
+-  enable_speech_service = is_chromeos || is_linux || is_mac || is_win
++  enable_speech_service = is_chromeos || is_linux || is_mac || is_win || is_haiku
+ }
+ 
+ declare_args() {
+diff --git a/components/compose/features.gni b/components/compose/features.gni
+index a646cb40e6..2342c5f202 100644
+--- a/components/compose/features.gni
++++ b/components/compose/features.gni
+@@ -4,5 +4,5 @@
+ 
+ declare_args() {
+   # Whether Compose is enabled in the build.
+-  enable_compose = is_mac || is_win || is_linux || is_chromeos
++  enable_compose = is_mac || is_win || is_linux || is_chromeos || is_haiku
+ }
+diff --git a/components/crash/core/common/BUILD.gn b/components/crash/core/common/BUILD.gn
+index 55e423a0e2..79903b8c38 100644
+--- a/components/crash/core/common/BUILD.gn
++++ b/components/crash/core/common/BUILD.gn
+@@ -8,7 +8,7 @@ import("//components/gwp_asan/buildflags/buildflags.gni")
+ 
+ declare_args() {
+   # If set to true, this will stub out and disable the entire crash key system.
+-  use_crash_key_stubs = is_fuchsia
++  use_crash_key_stubs = is_fuchsia || is_haiku
+ }
+ 
+ group("common") {
+diff --git a/components/enterprise/buildflags/buildflags.gni b/components/enterprise/buildflags/buildflags.gni
+index 07c3959373..fe971998bc 100644
+--- a/components/enterprise/buildflags/buildflags.gni
++++ b/components/enterprise/buildflags/buildflags.gni
+@@ -18,7 +18,7 @@ declare_args() {
+ 
+   # Indicates support for Data Control rules.
+   enterprise_data_controls =
+-      is_win || is_mac || is_linux || is_chromeos || is_android || is_ios
++      is_win || is_mac || is_linux || is_chromeos || is_android || is_ios || is_haiku
+ 
+   # Indicates support for client certificates provisioning.
+   # iOS support is currently under development
+@@ -27,7 +27,7 @@ declare_args() {
+ 
+   # Indicates support for watermark.
+   enterprise_watermark =
+-      (is_win || is_mac || is_linux || is_chromeos || is_ios) && !is_castos
++      (is_win || is_mac || is_linux || is_chromeos || is_ios) && !is_castos || is_haiku
+ 
+   enterprise_screenshot_protection = is_win || is_mac || is_ios || is_android
+ 
+@@ -35,7 +35,7 @@ declare_args() {
+ 
+   # Support on all platforms except for iOS since it uses `WKWebView` cache.
+   enterprise_cache_encryption =
+-      is_win || is_mac || is_linux || is_chromeos || is_android
++      is_win || is_mac || is_linux || is_chromeos || is_android || is_haiku
+ 
+   # Indicates support for Enterprise Proxy policy and service.
+   enterprise_proxy =
+diff --git a/components/enterprise/connectors/core/BUILD.gn b/components/enterprise/connectors/core/BUILD.gn
+index c3e3d2bdff..fa8084cdd2 100644
+--- a/components/enterprise/connectors/core/BUILD.gn
++++ b/components/enterprise/connectors/core/BUILD.gn
+@@ -104,7 +104,7 @@ source_set("core") {
+   configs += [ "//build/config/compiler:no_exit_time_destructors" ]
+ }
+ 
+-if (enterprise_cloud_content_analysis || is_android) {
++if (enterprise_cloud_content_analysis || is_android || is_haiku) {
+   source_set("cloud_content_scanning") {
+     configs += [ "//components/enterprise:extra_warnings" ]
+ 
+@@ -308,7 +308,7 @@ source_set("unit_tests") {
+   ]
+ }
+ 
+-if (enterprise_cloud_content_analysis || is_android) {
++if (enterprise_cloud_content_analysis || is_android || is_haiku) {
+   source_set("cloud_content_scanning_unit_tests") {
+     testonly = true
+ 
+diff --git a/components/on_device_translation/buildflags/features.gni b/components/on_device_translation/buildflags/features.gni
+index ce4ecffcbf..e238246771 100644
+--- a/components/on_device_translation/buildflags/features.gni
++++ b/components/on_device_translation/buildflags/features.gni
+@@ -5,5 +5,5 @@
+ declare_args() {
+   # On Device Translation is still not supported on other platforms.
+   # TODO(crbug.com/364795294): Support other platforms.
+-  enable_on_device_translation = is_mac || is_win || is_linux || is_chromeos
++  enable_on_device_translation = is_mac || is_win || is_linux || is_chromeos || is_haiku
+ }
+diff --git a/components/record_replay/content/renderer/BUILD.gn b/components/record_replay/content/renderer/BUILD.gn
+index 3e6b1e8dc9..e53c6e16d0 100644
+--- a/components/record_replay/content/renderer/BUILD.gn
++++ b/components/record_replay/content/renderer/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_win || is_mac || is_linux || is_chromeos)
++assert(is_win || is_mac || is_linux || is_chromeos || is_haiku)
+ 
+ static_library("renderer") {
+   sources = [
+diff --git a/components/signin/features.gni b/components/signin/features.gni
+index cbd5ae2384..fd2bd5261a 100644
+--- a/components/signin/features.gni
++++ b/components/signin/features.gni
+@@ -10,7 +10,7 @@ declare_args() {
+ }
+ 
+ # Dice is supported on the platform (but not necessarily enabled).
+-enable_dice_support = is_linux || is_mac || is_win || is_fuchsia
++enable_dice_support = is_linux || is_mac || is_win || is_fuchsia || is_haiku
+ 
+ # Mirror is enabled and other account consistency mechanisms are not available.
+ enable_mirror = is_android || is_chromeos || is_ios
+diff --git a/components/supervised_user/buildflags.gni b/components/supervised_user/buildflags.gni
+index 7bb1f5758b..7b033916c4 100644
+--- a/components/supervised_user/buildflags.gni
++++ b/components/supervised_user/buildflags.gni
+@@ -6,5 +6,6 @@ declare_args() {
+   # Enables supervision for Family Link users.
+   enable_supervised_users =
+       # Platforms which fully support supervision features:
+-      is_android || is_chromeos || is_ios || is_linux || is_mac || is_win
++      is_android || is_chromeos || is_ios || is_linux || is_mac ||
++      is_win || is_haiku
+ }
+diff --git a/components/webapps/isolated_web_apps/BUILD.gn b/components/webapps/isolated_web_apps/BUILD.gn
+index 479dc71d07..93a7935fa7 100644
+--- a/components/webapps/isolated_web_apps/BUILD.gn
++++ b/components/webapps/isolated_web_apps/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_chromeos || is_win || is_mac || is_linux,
++assert(is_chromeos || is_win || is_mac || is_linux || is_haiku,
+        "components/webapps/isolated_web_apps are no-op on Android or iOS.")
+ 
+ component("isolated_web_apps") {
+diff --git a/components/webapps/isolated_web_apps/test_support/BUILD.gn b/components/webapps/isolated_web_apps/test_support/BUILD.gn
+index 42ff3be6c3..3a5fb6abe1 100644
+--- a/components/webapps/isolated_web_apps/test_support/BUILD.gn
++++ b/components/webapps/isolated_web_apps/test_support/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_chromeos || is_win || is_mac || is_linux,
++assert(is_chromeos || is_win || is_mac || is_linux || is_haiku,
+        "components/webapps/isolated_web_apps are no-op on Android or iOS.")
+ 
+ source_set("test_support") {
+diff --git a/content/shell/BUILD.gn b/content/shell/BUILD.gn
+index ea8664f6ba..9a03f788d1 100644
+--- a/content/shell/BUILD.gn
++++ b/content/shell/BUILD.gn
+@@ -1159,7 +1159,7 @@ group("content_shell_crash_test") {
+   if (is_win) {
+     data_deps += [ "//build/win:copy_cdb_to_output" ]
+   }
+-  if (is_posix) {
++  if (is_posix && !is_haiku) {
+     data_deps += [
+       "//third_party/breakpad:dump_syms",
+       "//third_party/breakpad:minidump_stackwalk",
+diff --git a/content/test/BUILD.gn b/content/test/BUILD.gn
+index 4897045f04..512afd0a3d 100644
+--- a/content/test/BUILD.gn
++++ b/content/test/BUILD.gn
+@@ -3148,7 +3148,8 @@ test("content_unittests") {
+     sources += [ "../browser/accessibility/browser_accessibility_state_impl_auralinux_unittest.cc" ]
+   }
+ 
+-  if (is_android || is_linux || is_chromeos || is_mac || is_win || is_fuchsia) {
++  if (is_android || is_linux || is_chromeos || is_mac || is_win ||
++      is_fuchsia || is_haiku) {
+     data = [
+       "$root_out_dir/content_shell.pak",
+       "data/",
+diff --git a/media/cdm/library_cdm/cdm_paths.gni b/media/cdm/library_cdm/cdm_paths.gni
+index efd69b8f34..2751fbd044 100644
+--- a/media/cdm/library_cdm/cdm_paths.gni
++++ b/media/cdm/library_cdm/cdm_paths.gni
+@@ -22,6 +22,8 @@ if (is_chromeos) {
+   component_os = "mac"
+ } else if (is_fuchsia) {
+   component_os = "fuchsia"
++} else if (is_haiku) {
++  component_os = "haiku"
+ } else {
+   assert(false, "unsupported_platform")
+ }
+diff --git a/services/screen_ai/buildflags/features.gni b/services/screen_ai/buildflags/features.gni
+index 86d9949cd8..0c062d62e0 100644
+--- a/services/screen_ai/buildflags/features.gni
++++ b/services/screen_ai/buildflags/features.gni
+@@ -6,7 +6,7 @@ import("//build/config/sanitizers/sanitizers.gni")
+ 
+ declare_args() {
+   # Screen AI service is only supported on desktop platforms.
+-  enable_screen_ai_service = is_linux || is_mac || is_chromeos || is_win
++  enable_screen_ai_service = is_linux || is_mac || is_chromeos || is_win || is_haiku
+ 
+   # Screen AI library is not available for browser tests on ChromeOS. Tast tests
+   # cover library's OCR functionality on ChromeOS.
+diff --git a/third_party/libxml/BUILD.gn b/third_party/libxml/BUILD.gn
+index 890afc0e83..e9be7f7829 100644
+--- a/third_party/libxml/BUILD.gn
++++ b/third_party/libxml/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ # Define an "os_include" variable that points at the OS-specific generated
+ # headers.  These were generated by running the configure script offline.
+-if (is_linux || is_chromeos || is_android || is_fuchsia) {
++if (is_linux || is_chromeos || is_android || is_fuchsia || is_haiku) {
+   os_include = "linux"
+ } else if (is_apple) {
+   os_include = "mac"
+diff --git a/third_party/zlib/BUILD.gn b/third_party/zlib/BUILD.gn
+index c37b425296..6d79f451a3 100644
+--- a/third_party/zlib/BUILD.gn
++++ b/third_party/zlib/BUILD.gn
+@@ -70,7 +70,8 @@ source_set("zlib_common_headers") {
+ # TODO(ritownsend@google.com): Optimizations temporarily disabled for
+ # Windows on Arm MSVC builds, see http://crbug.com/v8/10012.
+ use_arm_neon_optimizations =
+-    (current_cpu == "arm" || current_cpu == "arm64") && !(is_win && !is_clang)
++    (current_cpu == "arm" || current_cpu == "arm64") &&
++    !(is_win && !is_clang) && !is_haiku
+ 
+ use_x86_x64_optimizations =
+     (current_cpu == "x86" || current_cpu == "x64") && !is_ios
+diff --git a/tools/grit/grit_args.gni b/tools/grit/grit_args.gni
+index cd2b6b9337..0e20dff17c 100644
+--- a/tools/grit/grit_args.gni
++++ b/tools/grit/grit_args.gni
+@@ -14,7 +14,8 @@ devtools_grd_path_no_ext = get_path_info(devtools_grd_path, "dir") + "/" +
+ # Prefer using this (and excluding specific platforms) when a resource applies
+ # to (most) desktop platforms.
+ assert(toolkit_views ==
+-       (is_chromeos || is_fuchsia || is_linux || is_mac || is_win))
++       (is_chromeos || is_fuchsia || is_linux || is_mac || is_win ||
++        is_haiku))
+ 
+ # Variables that are passed to grit with the -D flag.
+ 
+diff --git a/tools/perf/chrome_telemetry_build/BUILD.gn b/tools/perf/chrome_telemetry_build/BUILD.gn
+index 08a2bf766c..a8622abe59 100644
+--- a/tools/perf/chrome_telemetry_build/BUILD.gn
++++ b/tools/perf/chrome_telemetry_build/BUILD.gn
+@@ -57,7 +57,9 @@ group("telemetry_chrome_test") {
+   }
+ 
+   if (is_linux || is_chromeos) {
+-    data_deps += [ "//third_party/breakpad:dump_syms" ]
++    if (!is_haiku) {
++      data_deps += [ "//third_party/breakpad:dump_syms" ]
++    }
+ 
+     # CrOS currently has issues with the locally compiled version of
+     # crashpad_database_util, so only include it on traditional Linux
+@@ -200,7 +202,7 @@ group("telemetry_chrome_test_without_chrome") {
+   ]
+ 
+   # Cr-Fuchsia doesn't support breakpad.
+-  if (!is_win && !is_fuchsia) {
++  if (!is_win && !is_fuchsia && !is_haiku) {
+     data_deps += [
+       # This is defined for Windows, but is unused by Telemetry on
+       # Windows, and including it can have issues when cross-compiling
+diff --git a/ui/base/BUILD.gn b/ui/base/BUILD.gn
+index 0710184a81..c66528f899 100644
+--- a/ui/base/BUILD.gn
++++ b/ui/base/BUILD.gn
+@@ -701,7 +701,7 @@ component("features") {
+   ]
+ }
+ 
+-if (is_win || is_mac || is_linux || is_chromeos) {
++if (is_win || is_mac || is_linux || is_chromeos || is_haiku) {
+   static_library("pixel_diff_test_support") {
+     testonly = true
+     sources = [
+diff --git a/ui/base/unowned_user_data/BUILD.gn b/ui/base/unowned_user_data/BUILD.gn
+index d851f5468c..709c70dc8c 100644
+--- a/ui/base/unowned_user_data/BUILD.gn
++++ b/ui/base/unowned_user_data/BUILD.gn
+@@ -6,7 +6,7 @@
+ # ones where it's needed today.
+ 
+ assert(
+-    is_win || is_apple || is_linux || is_chromeos || is_android || is_fuchsia)
++    is_win || is_apple || is_linux || is_chromeos || is_android || is_fuchsia || is_haiku)
+ 
+ component("unowned_user_data") {
+   defines = [ "IS_UNOWNED_USER_DATA_IMPL" ]
+diff --git a/ui/menus/BUILD.gn b/ui/menus/BUILD.gn
+index dbf5936ff2..94e97c41ff 100644
+--- a/ui/menus/BUILD.gn
++++ b/ui/menus/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//testing/test.gni")
+ assert(is_win || is_mac || is_linux || is_chromeos || is_android ||
+-       is_fuchsia || is_ios)
++       is_fuchsia || is_ios || is_haiku)
+ 
+ component("menus") {
+   sources = [
+diff --git a/ui/views/BUILD.gn b/ui/views/BUILD.gn
+index e35d5f0401..96e87953ba 100644
+--- a/ui/views/BUILD.gn
++++ b/ui/views/BUILD.gn
+@@ -1050,7 +1050,7 @@ component("views") {
+   }
+ }
+ 
+-if (is_win || is_mac || is_linux || is_chromeos) {
++if (is_win || is_mac || is_linux || is_chromeos || is_haiku) {
+   static_library("view_pixel_diff_test_support") {
+     testonly = true
+     sources = [
+diff --git a/ui/webui/webui_features.gni b/ui/webui/webui_features.gni
+index 8793ed89a9..81bba8ba75 100644
+--- a/ui/webui/webui_features.gni
++++ b/ui/webui/webui_features.gni
+@@ -44,7 +44,8 @@ if (enable_cast_receiver || is_cast_android || is_castos) {
+     # Enable the WebUI version of the New Tab Page.
+     enable_webui_ntp =
+         target_os == "win" || target_os == "mac" || target_os == "linux" ||
+-        target_os == "chromeos" || is_desktop_android
++        target_os == "chromeos" || target_os == "haiku" ||
++        is_desktop_android
+   }
+   declare_args() {
+     # Enable WebUI Contextual Tasks Composebox.
