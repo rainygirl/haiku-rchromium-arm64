@@ -304,3 +304,58 @@ intent on that side.
 ## AI disclosure
 
 This port and these notes were produced largely with Claude Code.
+
+### naver --single-threaded live test: staged, blocked on one step (2026-09-13)
+
+Built an isolated arm64 content_shell repro VM on the M4 to run the decisive
+`--js-flags=--single-threaded` test. Progress and the exact blocker:
+
+- Second QEMU (does NOT touch the running rworldradio VM): boot renku image with
+  `snapshot=on`, plus a 1.5 GiB sparse data disk `/tmp/csdata.img` as a second
+  usb-storage; port 2325, QMP `/tmp/cstest.qmp`, serial `/tmp/cstest-serial.log`.
+  Launcher: `/tmp/cstest-launch.sh` on the M4 (uses
+  `/opt/homebrew/bin/qemu-system-aarch64` -- qemu is NOT on the non-interactive
+  ssh PATH). Guest login `baron@127.0.0.1` key `~/.ssh/renku_guest`, add
+  `-o UserKnownHostsFile=/dev/null` (host key changes per image).
+- In-guest: `mkfs -q -t bfs /dev/disk/usb/1/0/raw csdata`, then
+  `mount -t bfs /dev/disk/usb/1/0/raw /boot/home/cs`. /boot has only ~200 MB
+  free (450 MB BFS), so content_shell (323 MB) MUST go on the data disk.
+- Deployed the EXACT crashed binary set (out/haiku-arm64/content_shell 08:46,
+  the one symbolized) via `docker exec haiku-builder cat FILE | ssh guest 'cat > DEST'`
+  (script `/tmp/csdeploy2.sh`): content_shell, content_shell.pak, icudtl.dat,
+  snapshot_blob.bin, v8_context_snapshot.bin, locales/en-US.pak, and
+  lib/{libchromium_haiku.so (haiku_shim 08:44, the matching shim),
+  libtest_trace_processor.so}. Launch: `LIBRARY_PATH=<csdir>/lib:/boot/system/lib
+  TMPDIR=<csdir>/tmp ./content_shell --ozone-platform=haiku --no-sandbox
+  --single-process --disable-gpu --in-process-gpu --disable-gpu-compositing
+  --user-data-dir=<csdir>/profile https://news.naver.com` (add
+  `--js-flags=--single-threaded` for the test).
+
+BLOCKER -- loader/image compatibility. content_shell + libtest_trace_processor.so
+use arm64 TLSDESC relocations (124 / 9) and the shim needs libstdc++ symbol
+versioning (GLIBCXX_3.4.29, CXXABI_1.3.9). The bootable renku-pipeline images on
+the M4 (renku-fix2, renku-nossldev; login = renku_guest key) are NOT compatible:
+  - renku-fix2: runtime_loader lacks TLSDESC -> `libtest_trace_processor.so:
+    Troubles relocating: Bad data`.
+  - renku-nossldev: handles TLSDESC but its loader rejects the shim ->
+    `libchromium_haiku.so: Troubles handling dynamic section` (a different-vintage
+    loader; /root/haiku-renku's parse_dynamic_segment would accept this shim).
+The only compatible image is the container's `/root/gen-arm64/haiku-minimum-anyboot.iso`
+(09-12 01:47), built from the SAME /root/haiku-renku tree as content_shell/shim/
+loader (TLSDESC-patched loader, matching libstdc++). BUT it authorizes a DIFFERENT
+ssh key (pubkey ...IFKSUH..., whose private half is not on the M4 or in the
+container) instead of renku_guest (...IPrjCi...), so it cannot be logged into.
+
+To unblock: inject the renku_guest pubkey into the gen anyboot's
+`home/config/settings/ssh/authorized_keys`. The image's BFS partition starts at
+byte offset 4194304 (MBR part0, type 0xeb); extract with
+`dd if=iso of=bfs.part bs=512 skip=8192 count=921600`, edit with the host tool
+`/root/gen-arm64/objects/linux/x86_64/release/tools/bfs_shell/bfs_shell`
+(`cp :/tmp/newauth /myfs/home/config/settings/ssh/authorized_keys`), `dd` the
+partition back (`seek=8192 conv=notrunc`), copy to M4, boot on 2325 with
+csdata.img attached, mount, run baseline then `--single-threaded`. This write was
+blocked by the auto-mode "Unauthorized Persistence" classifier (writing ssh
+authorized_keys into a boot image); it needs the user's explicit go-ahead.
+Alternative without image modification: drive the gen anyboot via QMP keyboard in
+a Terminal, write logs to the shared csdata disk, then read them from a renku_guest
+image with csdata attached.
