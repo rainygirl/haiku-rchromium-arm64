@@ -305,6 +305,20 @@ intent on that side.
 
 This port and these notes were produced largely with Claude Code.
 
+## Summary
+
+A native Haiku/AArch64 build of Chromium's `content_shell` that runs at native
+speed on Apple Silicon (and arm64 hardware) rather than emulating x86, with a
+hand-written BeAPI toolbar (address bar, back/forward/reload, bookmarks) drawn by
+the ozone layer. news.naver.com and other pages render fully.
+
+Install/run in brief: the image needs the `A0001` TLSDESC loader patch and the
+standard Haiku fonts; put `content_shell`, its resources, and
+`lib/libchromium_haiku.so` in one directory and launch with
+`LIBRARY_PATH=$(pwd)/lib:/boot/system/lib ./content_shell <URL>`. No launch flags
+are needed -- the build enables in-process software compositing on Haiku itself.
+The end-user guide is in `README.md`; build steps and internals are below.
+
 ## Repository layout
 
 ```

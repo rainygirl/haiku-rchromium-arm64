@@ -74,15 +74,3 @@ The toolbar across the top of the window is drawn with BeAPI controls:
 - news.naver.com and other pages render fully with the native toolbar,
   address-bar navigation, and bookmarks. The full verification history and the
   known rough edges are in [`AGENTS.md`](AGENTS.md).
-
-## 요약
-
-Apple Silicon(및 arm64 하드웨어)에서 네이티브로 도는 Haiku/AArch64용 Chromium
-`content_shell`입니다. 네이티브 BeAPI 툴바(주소창, 뒤로/앞으로/새로고침, 북마크)를
-갖췄고, news.naver.com이 완전히 렌더됩니다. 이 문서는 **설치·실행 안내**이며,
-빌드·아키텍처·포팅 내용은 [`AGENTS.md`](AGENTS.md)에 있습니다.
-
-설치 요약: 이미지에 `A0001` TLSDESC 로더 패치와 표준 폰트가 있어야 하고,
-`content_shell`·리소스·`lib/libchromium_haiku.so`를 한 폴더에 두고
-`LIBRARY_PATH=$(pwd)/lib:/boot/system/lib ./content_shell <URL>`로 실행합니다.
-별도 실행 플래그는 필요 없습니다.
