@@ -54,11 +54,81 @@ The BeAPI shim library is built separately from `haiku_shim/` with the same gcc
 that built `libbe` (not Chromium's clang) and linked as `libchromium_haiku`;
 `haiku_shim/haiku_shim.h` explains why.
 
-## Running
+## Installing and running on the device
 
-The RENKU arm64 image must carry the `A0001` runtime_loader TLSDESC patch (see
-`../haiku_kernel_patches/`), or the binary will not load. Launch flags that the
-port currently needs are recorded in `AGENTS.md`.
+Verified on the real renku-arm64 Haiku desktop (booted on Apple Silicon under
+QEMU/HVF); the same steps apply to Haiku arm64 on hardware.
+
+### Prerequisites (the image)
+
+- **`A0001` runtime_loader TLSDESC patch.** clang emits `R_AARCH64_TLSDESC`
+  relocations that a stock Haiku loader cannot resolve, so `content_shell` (and
+  `libtest_trace_processor.so`) will not load. The image's loader must carry
+  `../haiku_kernel_patches/A0001-arm64-runtime-loader-tlsdesc.patch`. If your
+  image predates it, graft a rebuilt `runtime_loader` into the image's
+  `haiku.hpkg` (`jam runtime_loader`, then `package add -f <hpkg> runtime_loader`
+  at the package top level, written back with `bfs_shell`, `sync` before `quit`)
+  -- the full recipe is in [`AGENTS.md`](AGENTS.md).
+- **Standard Haiku fonts.** Text is shaped and rasterised through the fontations
+  backend against the system fonts; the stock RENKU/Haiku font set is enough
+  (Korean on news.naver.com renders with it).
+
+### Deploy
+
+Put the binary, its resources, and the BeAPI shim together, e.g. under a `cs/`
+directory on any writable BFS volume:
+
+```
+cs/content_shell                 # the binary
+cs/content_shell.pak             # resources ...
+cs/icudtl.dat
+cs/snapshot_blob.bin
+cs/v8_context_snapshot.bin
+cs/locales/
+cs/lib/libchromium_haiku.so      # the BeAPI shim (see below)
+```
+
+`content_shell` has a `DT_NEEDED` on `libchromium_haiku` (the native toolbar
+shim), so point the loader at `cs/lib` when launching:
+
+```sh
+cd cs
+LIBRARY_PATH=$(pwd)/lib:/boot/system/lib ./content_shell https://news.naver.com
+```
+
+The shim must be relinked with 4 KB pages, or the loader rejects it
+(`libchromium_haiku.so: Troubles handling dynamic section`) -- gcc defaults to a
+64 KB `max-page-size` on arm64, whose offset<->vaddr skew the loader mis-maps:
+
+```sh
+aarch64-unknown-haiku-g++ -shared haiku_shim.o -o libchromium_haiku.so \
+    -Wl,-soname,libchromium_haiku.so -Wl,--hash-style=both \
+    -Wl,-z,max-page-size=0x1000 -lbe -lstdc++ -lroot
+```
+
+### Run
+
+No launch flags are needed any more -- the port appends `--in-process-gpu` and
+`--disable-gpu` itself on Haiku (Haiku has no GL, so the page composites in
+software and the display compositor runs in the browser process, next to the
+BWindow). Just:
+
+```sh
+./content_shell https://news.naver.com
+```
+
+A native BeAPI window opens with the hand-written toolbar (address bar,
+back/forward/reload, bookmarks) drawn by the ozone layer.
+
+### Verified behaviour and limits
+
+- news.naver.com renders fully (Korean text, broadcaster logos, LIVE video
+  thumbnails) with zero crashes; simple pages likewise. Native toolbar,
+  address-bar navigation, and bookmarks work.
+- The earlier "naver is a use-after-free / blob corruption" diagnosis was wrong;
+  the real cause was the missing software-compositing wiring fixed above. See
+  [`AGENTS.md`](AGENTS.md) for the full root-cause writeup and the remaining
+  rough edges.
 
 ## Relationship to the x86 port
 
@@ -76,5 +146,7 @@ asks to converge the two styles. See `AGENTS.md` for detail.
 
 AArch64용 전체 Chromium 154 포트입니다. `../x86/`(32비트 content_shell)와는 다른
 포트로, 크로스 툴체인(clang/lld, Rust, Python, gn/ninja)부터 새로 빌드해
-`//chrome`를 만듭니다. 빌드는 M4의 `haiku-builder` 컨테이너에서, 실행은 RENKU
-arm64 QEMU 이미지에서 합니다. 이미지에는 `A0001` TLSDESC 커널 패치가 필요합니다.
+`//chrome`를 만듭니다. 빌드는 M4의 `haiku-builder` 컨테이너에서, 실행은 실기
+renku-arm64 Haiku 데스크톱(Apple Silicon + QEMU/HVF, 또는 arm64 하드웨어)에서
+합니다. 이미지에는 `A0001` TLSDESC 로더 패치가 필요합니다. 설치/실행 절차는 위의
+"Installing and running on the device"를 참고하세요.
