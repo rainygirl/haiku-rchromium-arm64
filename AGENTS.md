@@ -620,3 +620,50 @@ the boot splash in this QEMU config; needs a desktop-capable arm64 image or
 on-device (renku-arm64) verification. (2) The exact browser subsystem doing the
 {0,-1} stray write in single-process (needs ASAN, unavailable on Haiku) -- not
 required now that multi-process avoids it.
+
+### CORRECTION (2026-09-14): naver is NOT solved by multi-process -- on-device visual test
+
+The earlier "SOLVED via multi-process" claim was WRONG. It rested on the headless
+renku-nossldev test, where DevTools showed the DOM (title "네이버 뉴스") but the
+renderer had not reached full render and there was no window to see. The on-device
+visual test corrects it.
+
+Method: grafted the TLSDESC runtime_loader into the DESKTOP image renku-arm64.iso
+(hrev99002_173; MBR part0 BFS at 4194304; package add the loader into
+haiku-...hpkg, same workflow as nossldev), booted it on the M4 with ramfb+QMP and
+the content_shell csdata.img as an AHCI second disk (a second USB disk hangs the
+splash; AHCI shows as /dev/disk/scsi/0/0/0/raw). renku-arm64.iso boots to a full
+Haiku DESKTOP on ramfb (QMP screenshots are real, not black). Login: baron with
+the image's key = the LOCAL Mac's ~/.ssh/id_ed25519 (pubkey ...IFKSUH...; the
+same key the container bakes), so to ssh from the M4 that private key must be on
+the M4.
+
+Real-hardware matrix (QMP screenshots):
+                simple data: page          news.naver.com
+  single-proc   RENDERS (bg #cfe + <h1>)   CRASH (whole app dies, window gone)
+  multi-proc    window+toolbar, content     renderer CRASH (window+toolbar stay,
+                BLANK (compositing not       content blank; SEGV_MAPERR ...010)
+                delivered to the BWindow)
+
+So:
+- The native BeAPI toolbar UI DOES render on device (window, address field showing
+  https://news.naver.com/, back/forward/reload/star/menu). Simple pages render in
+  single-process. The TLSDESC-loader graft + 4 KB-relinked shim work on device.
+- naver's page content does NOT render. The renderer crashes with the V8 string-
+  table stomp (SEGV @ +0x10) during heavy background compile of naver's JS, in
+  BOTH single-process (whole process dies) and multi-process (renderer dies).
+  Because it still crashes with the renderer ISOLATED (multi-process), the stomp is
+  RENDERER-INTERNAL V8, not a browser-side write -- correcting the earlier
+  "browser-side stomp" reading (that too came from the headless false-negative).
+- Not avoided by: process model, --js-flags=--single-threaded, --js-flags=
+  "--no-lazy --no-concurrent-recompilation --no-parallel-compile-tasks-*",
+  off-the-record/in-memory storage, or disabling http/V8 cache.
+- Multi-process additionally does not composite renderer content into the BWindow
+  on this port (blank content even for a simple page that single-process draws
+  fine) -- a separate cross-process present bug.
+
+Bottom line: naver is still broken. The real fix is the V8 string-table corruption
+during heavy background compile (the deterministic {0,-1} stomp of the
+AstValueFactory backing), which needs V8-level debugging that is currently blocked
+(no ASAN runtime for Haiku; a live write-catch is intractable here). Single-process
+renders simple/light pages; heavy pages like naver crash.
