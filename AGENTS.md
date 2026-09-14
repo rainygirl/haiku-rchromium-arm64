@@ -305,6 +305,66 @@ intent on that side.
 
 This port and these notes were produced largely with Claude Code.
 
+## Repository layout
+
+```
+port/              the port generator: apply-haiku-port.sh + port-*.py + files/
+rust/              the aarch64-unknown-haiku Rust toolchain patch and installer
+toolchain-build/   cross-build of the sysroot, Python 3.14, gn/ninja, clang/lld
+haiku_shim/        libchromium_haiku source: BeAPI subclasses compiled with the
+                   system gcc, kept out of Chromium's clang objects (RTTI reasons)
+packaging/         the hpkg PackageInfo
+```
+
+The Chromium checkout itself is not vendored here (tens of GB). `port/` is the
+scaffolding applied on top of a fetched `chromium/src`.
+
+## Building
+
+Inside the `haiku-builder` container (Linux, cross-compiling to Haiku arm64):
+
+```sh
+# 1. Toolchain and build-time packages (sysroot, python, gn/ninja, clang/lld).
+#    Hours; each step is skipped if its output already exists.
+toolchain-build/build-all-arm64.sh
+
+# 2. Rust with an aarch64-unknown-haiku target (Chromium's Rust cannot be
+#    switched off, and stock rustc has no Haiku arm64 target).
+rust/build-rust-arm64.sh
+rust/install-rust-toolchain.sh <chromium-src>
+
+# 3. Apply the Haiku port to a fetched Chromium checkout.
+port/apply-haiku-port.sh <chromium-src>
+python3 port/port-ozone.py <chromium-src>   # registers the Ozone platform + copies ui/ozone/platform/haiku
+
+# 4. Configure and build.
+cd <chromium-src>
+gn gen out/haiku-arm64 --args='
+    target_os="haiku" target_cpu="arm64" is_debug=false symbol_level=0
+    haiku_sysroot="/root/pybuild/sysroot"
+    haiku_gcc_lib_dir="<print-file-name of crtbeginS.o dir>"'
+ninja -C out/haiku-arm64 chrome
+```
+
+The BeAPI shim library is built separately from `haiku_shim/` with the same gcc
+that built `libbe` (not Chromium's clang) and linked as `libchromium_haiku`;
+`haiku_shim/haiku_shim.h` explains why. It must be relinked with 4 KB pages
+(`-Wl,-z,max-page-size=0x1000`), or the arm64 loader mis-maps its gcc-default
+64 KB segments -- see the shim-load section below and the README deploy notes.
+
+## Relationship to the x86 port
+
+`../rchromium-native-x86/` has its own, independently written native toolbar
+(Chromium 87, BControlLook-drawn) that meets the same user spec. It is not a
+backport of this one and this is not a backport of it -- the Chromium 87 vs 154
+APIs differ, so no source is shared. What IS shared is the design: a widget-keyed
+bridge so content_shell never sees a BeAPI type, RTTI isolation in a separately
+built shim, an explicit `platform_->aura->ShowWindow()` in the delegate, and the
+SetAddressBarURL / SetIsLoading / EnableUIControl hook mapping. Both toolbars
+already exist and work; do not reimplement one to match the other unless the user
+asks to converge the two styles. (See also "## The x86 sibling already has its
+own native toolbar" above for the chronological detail.)
+
 ### naver --single-threaded live test: staged, blocked on one step (2026-09-13)
 
 Built an isolated arm64 content_shell repro VM on the M4 to run the decisive
