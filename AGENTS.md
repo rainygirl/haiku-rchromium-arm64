@@ -709,3 +709,40 @@ crash is avoided only by not parsing that much (light pages render fine; heavy
 pages like naver crash). Multi-process does NOT help (the UAF is in the renderer's
 own V8), and neither do --single-threaded, --no-lazy/--no-parallel-compile,
 off-the-record, or cache flags.
+
+### naver on-device: renders intermittently; general UAF, needs ASAN-class tooling (2026-09-14)
+
+On the real renku-arm64 desktop image (renku-arm64.iso, TLSDESC loader grafted into
+its haiku hpkg, content_shell on an AHCI-attached csdata.img; boots to the RENKU
+desktop on ramfb, QMP screenshots are real):
+- news.naver.com RENDERED fully once (native BeAPI toolbar + full naver News: nav
+  tabs, news cards, LIVE thumbnails KBS/YTN/MBN, Korean text) with the
+  PADBG-instrumented build. But a re-run CRASHED. So it is INTERMITTENT -- a
+  Heisenbug, the hallmark of the use-after-free.
+- The instrumented build (PADBG PA-free watch + WatchedAllocationPolicy on the
+  string table) perturbs the heap enough to sometimes dodge the UAF, sometimes not.
+- Crucially, the re-run crash did NOT trip PADBG (which watches only the string-
+  table hashmap backing) and instead hit base::Vector::length()'s
+  CHECK_GE(INT_MAX, length_) (BUS_ADRALN 0 via OS::Abort). So the corrupted victim
+  VARIES (hashmap entry vs Vector length) -- it is a GENERAL use-after-free: a stale
+  pointer frees some live V8/base allocation, its slot gets the PA freelist {0,~0},
+  and whatever later reads that slot crashes. Not one structure -> watching one
+  structure (as PADBG did) cannot catch it.
+
+So a narrow/principled fix (e.g., zone-backing just the string table) would not fix
+the general UAF (the Vector victim proves other allocations are hit too). A CERTAIN
+fix needs to catch the erroneous free of a live allocation, which requires
+ASAN-class tooling (quarantine + redzones + shadow): ASAN has no Haiku runtime
+(clang bundles Linux targets only), and the Haiku-native alternatives (build with
+use_partition_alloc_as_malloc=false + Haiku guarded/quarantine malloc, or a
+PartitionAlloc quarantine/*Scan build) are heavy rebuilds with memory-blowup risk
+for a full browser and may themselves perturb the layout. JS itself is correct on
+arm64 (6*7=42, sum(i^2,0..999)=332833500 rendered), so this is NOT the x86 session's
+link-corruption bug -- that was fixed separately by byte-restoring the V8 embedded
+blob; arm64's is a real heap UAF.
+
+State: root cause DEFINITIVELY diagnosed (general renderer-side UAF, freelist {0,~0}
+proof + Heisenbug). Native toolbar works; light pages render reliably; heavy pages
+like naver render sometimes and crash sometimes. A certain fix is gated on getting
+ASAN-class UAF tooling onto Haiku arm64 (a real porting effort), or landing an
+upstream V8 lifetime fix once the culprit is identified with such tooling.
