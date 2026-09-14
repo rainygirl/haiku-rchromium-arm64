@@ -563,3 +563,27 @@ Haiku arm64) or a live write-catch (intractable: dynamic hot victim, async one-s
 foreign write, no gdb/watchpoint timing on the guest). Practical fix remains
 multi-process; the deep fix is finding the stray {0,-1} writer in the network/
 browser path under concurrent load.
+
+### naver: SOLVED via multi-process (2026-09-14)
+
+Proof the crash is fixed: run content_shell WITHOUT --single-process (multi-process,
+renderer isolated) and load news.naver.com. DevTools /json/list on the renderer
+reports:
+    "title": "네이버 뉴스", "url": "https://news.naver.com/", "type": "page"
+i.e. naver's HTML+JS parsed and executed (it set the page title) with NO crash --
+the exact page that crashes deterministically in single-process. So the fix does
+not need ASAN / the exact stray-write line: isolating the renderer removes the
+single-process browser-side stomp of the renderer's V8 string table.
+
+ASAN is not available here (Chromium's bundled clang ships asan runtimes only for
+Linux targets, none for aarch64-unknown-haiku; sanitizers.gni has no Haiku), so the
+exact writer line stays open -- but it is not needed to make naver work.
+
+FIX to ship: run RChromium arm64 multi-process (drop --single-process). The native
+BeAPI toolbar is drawn by the browser process (shim/ozone), the page by the
+renderer process, which matches real Chromium's split -- so multi-process is
+compatible with the native toolbar. Remaining engineering: make the renderer
+child-process launcher solid on Haiku and set multi-process as the default launch.
+To confirm visually, boot a desktop-capable arm64 image (the renku-verify images
+boot headless -- sshd but no app_server desktop on ramfb -- so screenshots are
+black; functional proof is via DevTools as above).
