@@ -667,3 +667,45 @@ during heavy background compile (the deterministic {0,-1} stomp of the
 AstValueFactory backing), which needs V8-level debugging that is currently blocked
 (no ASAN runtime for Haiku; a live write-catch is intractable here). Single-process
 renders simple/light pages; heavy pages like naver crash.
+
+### naver crash ROOT CAUSE confirmed: use-after-free of the live V8 string table (2026-09-14)
+
+Traced the naver crash to a definitive use-after-free (NOT a stomp, NOT link
+corruption):
+
+- The corrupted "entry" bytes are {0x00 x8, 0xFF x8}. This is exactly a
+  PartitionAlloc EncodedNextFreelistEntry for a nullptr next: the default freelist
+  is EncodedFreelistPtr; Transform() is ReverseBytes on little-endian, so
+  Transform(0)=0 (encoded next), and the shadow is Inverted()=~0=0xffffffffffffffff.
+  So a freed PA slot that is the LAST on its freelist (next==nullptr) has first 16
+  bytes {0, ~0} -- precisely the observed pattern. The string-table backing is a
+  freed PA slot being read as a hashmap entry.
+- V8DBG showed the corrupted entry is entry[0] of the CURRENT live map_
+  (impl_.map_, == the allocation base, PROT_NONE guard page just before it =
+  PA slot start), found by scanning string_table_ at GetString entry. So it is the
+  LIVE string_table_ backing that has been freed -- while the AstValueFactory is
+  still parsing and calling GetString -- not the old array Resize frees, and not
+  after the factory's destruction. Something frees the live map_ slot mid-parse
+  (a stray free / double-allocation of that address by other code).
+- NOT link corruption: JS executes correctly on arm64 (a data: page computed
+  6*7=42 and sum(i^2, i=0..999)=332833500 and rendered them). So the V8 embedded
+  builtins blob is intact (unlike the x86 session's link-corruption SIGILL, which
+  was its old ld with low-memory flags overwriting the blob -- an x86-only issue).
+- PA is not generally broken (JS array allocations work). The UAF is specific to
+  naver's heavy load.
+
+The AstValueFactory string_table_ is deep-copied from AstStringConstants'
+string_table_ (ctor `string_table_(string_constants->string_table())` ->
+TemplateHashMapImpl(const*, ...) allocates a new backing and memcpy's), so it owns
+its backing; it is freed in the (defaulted) dtor or in Resize (old array). The
+crash reading the CURRENT map_ as freed means an external free of the live slot.
+
+Fix direction: this is a V8/allocator lifetime bug -- a stray free or double-alloc
+of the live AstValueFactory string-table backing during heavy background compile
+on arm64. Pinning the exact free-site needs allocator-level tracing (log
+base::Malloc/base::Free or PA alloc/free of that address with backtraces) or a
+dcheck_always_on / PA double-free-detection build -- both heavy rebuilds. The
+crash is avoided only by not parsing that much (light pages render fine; heavy
+pages like naver crash). Multi-process does NOT help (the UAF is in the renderer's
+own V8), and neither do --single-threaded, --no-lazy/--no-parallel-compile,
+off-the-record, or cache flags.
