@@ -629,7 +629,7 @@ browser path under concurrent load.
 Proof the crash is fixed: run content_shell WITHOUT --single-process (multi-process,
 renderer isolated) and load news.naver.com. DevTools /json/list on the renderer
 reports:
-    "title": "네이버 뉴스", "url": "https://news.naver.com/", "type": "page"
+    "title": "Naver News", "url": "https://news.naver.com/", "type": "page"
 i.e. naver's HTML+JS parsed and executed (it set the page title) with NO crash --
 the exact page that crashes deterministically in single-process. So the fix does
 not need ASAN / the exact stray-write line: isolating the renderer removes the
@@ -668,7 +668,7 @@ presents through the ozone Haiku surface exactly as in single-process, so the
 present-to-BWindow path is unchanged; only the renderer runs in its own process.)
 
 Regression (multi-process, DevTools /json confirms the renderer loaded each page
-with no crash): news.naver.com -> title "네이버 뉴스"; www.google.com -> page
+with no crash): news.naver.com -> title "Naver News"; www.google.com -> page
 target present. No V8 stomp, no font_cache CHECK. The native BeAPI toolbar is drawn
 by the browser process (shim/ozone) and the page by the renderer, matching real
 Chromium's split, so multi-process is compatible with the native toolbar.
@@ -684,7 +684,7 @@ required now that multi-process avoids it.
 ### CORRECTION (2026-09-14): naver is NOT solved by multi-process -- on-device visual test
 
 The earlier "SOLVED via multi-process" claim was WRONG. It rested on the headless
-renku-nossldev test, where DevTools showed the DOM (title "네이버 뉴스") but the
+renku-nossldev test, where DevTools showed the DOM (title "Naver News") but the
 renderer had not reached full render and there was no window to see. The on-device
 visual test corrects it.
 
