@@ -746,3 +746,68 @@ proof + Heisenbug). Native toolbar works; light pages render reliably; heavy pag
 like naver render sometimes and crash sometimes. A certain fix is gated on getting
 ASAN-class UAF tooling onto Haiku arm64 (a real porting effort), or landing an
 upstream V8 lifetime fix once the culprit is identified with such tooling.
+
+### naver crash SOLVED -- real cause is software-compositing wiring, NOT UAF/blob (2026-09-14, corrected)
+
+Every earlier naver diagnosis in this file (V8 background-parser UAF; PartitionAlloc
+freelist {0,~0} use-after-free; base::Vector length corruption; "general Heisenbug
+UAF"; and the peer's embedded-blob load/link-corruption hypothesis) was WRONG. On-device
+testing with an instrumented build settled it definitively.
+
+Method:
+- Built content_shell with the V8 embedded-blob integrity check forced ON in release
+  (isolate.cc SetEmbeddedBlob, normally #ifdef DEBUG): recomputes the in-memory blob
+  hash at every isolate init, FATALs on mismatch, prints "RCHROMIUM blobverify PASS
+  data=.. code=.." on match. Also ran with --js-flags=--verify-snapshot-checksum.
+- Deployed via bfs_shell into csdata.img, ran on the real renku-arm64 desktop VM,
+  drove the guest Terminal over QMP (mouse via usb-tablet abs pointer + send-key;
+  screendump for output). Guest paths: csdata mounts at /csdata; symlink
+  /boot/home/cs -> /csdata reproduces the loader's expected layout. content_shell +
+  resources live at /csdata (== /boot/home/cs).
+
+Findings:
+- blobverify PASSED in every process, every run (data=8469670f code=6a9f10cd, identical
+  to build-time), and --verify-snapshot-checksum raised no CHECK. So BOTH the embedded
+  builtins blob and the startup snapshot are byte-perfect in memory at runtime. That
+  kills the load/link-corruption hypothesis outright (a FATAL would fire in any process
+  whose blob was wrong; none did). readelf confirms the blob segments are offset==vaddr
+  (no skew), so the gcc-64KB loader bug that hit the shim cannot touch them.
+- The actual crash, caught deterministically:
+    ERROR ui/gl/init/gl_factory.cc:87  List of allowed GL implementations is empty.
+    ERROR viz_main_impl.cc:190         Exiting GPU process due to errors during init
+    FATAL components/viz/service/display_embedder/output_surface_provider_impl.cc:167
+          Check failed: surface_ozone.
+  The stack-scan symbols (fontations_ffi$..BridgeFontRef, _v8_internal_Node_Print) are
+  nearest-export noise, not the real frames. This is a DETERMINISTIC CHECK, not a UAF:
+  same faulting offset (image + 0xaee8000) every crash run.
+
+Root cause (in the port's own code):
+- Haiku has no GL, so viz falls back to software compositing. The software output
+  device for OZONE is built by HaikuSurfaceFactory::CreateCanvasForWidget
+  (ui/ozone/platform/haiku/haiku_surface_factory.cc), which returns nullptr when the
+  factory has no window manager -- and OzonePlatformHaiku::InitializeGPU() builds the
+  GPU-process factory with HaikuSurfaceFactory(nullptr) on purpose (windows live in the
+  browser process). In the DEFAULT multi-process model the display compositor runs in a
+  SEPARATE gpu/viz process, so window_manager_ is null there -> CreateCanvasForWidget
+  null -> CHECK(surface_ozone) FATAL. The source comment already says "Chrome asks for
+  viz to run in-process on this platform", but nothing actually enforces it
+  (ozone_platform_haiku.cc has no GetPlatformProperties override, no in-process forcing).
+- --in-process-gpu alone moves viz into the browser process (window_manager_ now
+  present, surface_ozone PASSES) but then in-process viz tries to create a GL context
+  and hits gl_factory_ozone.cc:62 NOTREACHED ("Expected Mock or Stub, actual:0" ==
+  kGLImplementationNone unhandled).
+- --disable-gpu alone leaves viz out-of-process -> surface_ozone again.
+
+FIX (verified on device, renders news.naver.com fully, reproduced 2x back-to-back,
+zero crashes; contrast: 100% crash/hang without):
+    content_shell --in-process-gpu --disable-gpu https://news.naver.com
+  --in-process-gpu puts the display compositor in the browser process (the process that
+  owns the BWindow / HaikuWindowManager) and --disable-gpu forces software compositing
+  so no GL context is ever created. The earlier "render / hang / crash" variance
+  ("Heisenbug") was just which way the same broken software-compositing path fell over
+  on a given run; forcing the correct path makes naver deterministic.
+
+Permanent fix (bake the two switches in for is_haiku so no flags are needed) is the
+next step -- append them at content_shell startup (ShellMainDelegate) / force in-process
+software compositing for the Haiku port. The x86 session's link-corruption fix is
+unrelated; arm64 never had a blob problem.
