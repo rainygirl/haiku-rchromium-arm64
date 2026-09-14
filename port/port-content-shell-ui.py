@@ -1,18 +1,33 @@
 #!/usr/bin/env python3
-"""Select R Chromium's Haiku ShellPlatformDelegate in content_shell.
+"""Select R Chromium's Haiku ShellPlatformDelegate in content_shell, and force
+software compositing in-process on Haiku.
 
-content/shell/BUILD.gn compiles exactly one shell_platform_delegate_*.cc, chosen
-by shell_use_toolkit_views. On Haiku toolkit_views is forced true (the desktop-
-platform assert in tools/grit/grit_args.gni lists is_haiku), so the views
-delegate would be picked -- drawing an in-content Back/Forward/Reload toolbar on
-top of R Chromium's own native BeAPI toolbar. So select the Haiku delegate
-first, before the views branch, and take the aura content-view delegate with it.
-Idempotent.
+1. content/shell/BUILD.gn compiles exactly one shell_platform_delegate_*.cc,
+   chosen by shell_use_toolkit_views. On Haiku toolkit_views is forced true (the
+   desktop-platform assert in tools/grit/grit_args.gni lists is_haiku), so the
+   views delegate would be picked -- drawing an in-content Back/Forward/Reload
+   toolbar on top of R Chromium's own native BeAPI toolbar. So select the Haiku
+   delegate first, before the views branch, and take the aura content-view
+   delegate with it.
+
+2. content/shell/app/shell_main_delegate.cc: force --in-process-gpu and
+   --disable-gpu on Haiku. Haiku has no GL, so the page composites in software,
+   and the display compositor must run in the browser process (where the BWindow
+   / HaikuWindowManager lives). Without --in-process-gpu the software output
+   device is built in a separate viz process whose HaikuSurfaceFactory has no
+   window manager, so CreateCanvasForWidget() returns null and
+   CHECK(surface_ozone) aborts (output_surface_provider_impl.cc:167). Without
+   --disable-gpu the in-process compositor still tries to create a GL context and
+   hits a NOTREACHED in gl_factory_ozone.cc:62. With both, news.naver.com and
+   other composited pages render instead of crashing/hanging (verified on the
+   renku-arm64 desktop, 2026-09-14).
+
+Both steps are idempotent.
 """
 import sys
 
 
-def main(src):
+def _patch_build_gn(src):
     p = src + "/content/shell/BUILD.gn"
     s = open(p).read()
     if "shell_platform_delegate_haiku.cc" in s:
@@ -75,6 +90,51 @@ def main(src):
         sys.exit(1)
     open(p, "w").write(s.replace(old, new, 1))
     print("  content_shell UI: haiku delegate selected (is_haiku first)")
+
+
+def _patch_main_delegate(src):
+    p = src + "/content/shell/app/shell_main_delegate.cc"
+    s = open(p).read()
+    if "BUILDFLAG(IS_HAIKU)" in s and "switches::kInProcessGPU" in s:
+        print("  content_shell UI: haiku compositing switches already set")
+        return
+    anchor = (
+        '    command_line.AppendSwitch(switches::kRunWebTests);\n'
+        '  }\n'
+    )
+    block = (
+        '\n'
+        '#if BUILDFLAG(IS_HAIKU)\n'
+        '  // Haiku has no GL, so the page must composite in software, and the\n'
+        '  // display compositor has to run in the browser process -- that is\n'
+        '  // where the BWindow (HaikuWindowManager) lives. Without\n'
+        '  // --in-process-gpu the software output device is built in a separate\n'
+        '  // viz process whose HaikuSurfaceFactory has no window manager, so\n'
+        '  // CreateCanvasForWidget() returns null and CHECK(surface_ozone)\n'
+        '  // aborts (output_surface_provider_impl.cc). Without --disable-gpu the\n'
+        '  // in-process compositor still tries to create a GL context and hits a\n'
+        '  // NOTREACHED in gl_factory_ozone.cc. Set both so every page\n'
+        '  // composites instead of crashing.\n'
+        '  if (!command_line.HasSwitch(switches::kInProcessGPU)) {\n'
+        '    command_line.AppendSwitch(switches::kInProcessGPU);\n'
+        '  }\n'
+        '  if (!command_line.HasSwitch(switches::kDisableGpu)) {\n'
+        '    command_line.AppendSwitch(switches::kDisableGpu);\n'
+        '  }\n'
+        '#endif  // BUILDFLAG(IS_HAIKU)\n'
+    )
+    n = s.count(anchor)
+    if n != 1:
+        print("  content_shell UI: main-delegate DRIFTED (anchor found %d times)" % n)
+        sys.exit(1)
+    open(p, "w").write(s.replace(anchor, anchor + block, 1))
+    print("  content_shell UI: haiku compositing switches set "
+          "(--in-process-gpu --disable-gpu)")
+
+
+def main(src):
+    _patch_build_gn(src)
+    _patch_main_delegate(src)
 
 
 if __name__ == "__main__":

@@ -807,7 +807,10 @@ zero crashes; contrast: 100% crash/hang without):
   ("Heisenbug") was just which way the same broken software-compositing path fell over
   on a given run; forcing the correct path makes naver deterministic.
 
-Permanent fix (bake the two switches in for is_haiku so no flags are needed) is the
-next step -- append them at content_shell startup (ShellMainDelegate) / force in-process
-software compositing for the Haiku port. The x86 session's link-corruption fix is
-unrelated; arm64 never had a blob problem.
+Permanent fix DONE (baked in; no flags needed): port/port-content-shell-ui.py now
+also patches content/shell/app/shell_main_delegate.cc BasicStartupComplete to append
+switches::kInProcessGPU + switches::kDisableGpu when BUILDFLAG(IS_HAIKU). Rebuilt
+content_shell, redeployed to csdata, and confirmed on the renku-arm64 desktop that
+`./content_shell https://news.naver.com` (NO flags) renders news.naver.com fully
+(broadcaster logos + LIVE video thumbnail images loaded), zero crashes. The x86
+session's link-corruption fix is unrelated; arm64 never had a blob problem.
