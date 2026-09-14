@@ -533,3 +533,33 @@ to be solid on Haiku; on arm64 it already runs naver without the font/V8 crashes
 The x86 session is pursuing the same on its hardware (its 32-bit JSEntryTrampoline
 SIGILL under off-the-record is suspected fragmentation, since arm64 64-bit runs JS
 fine under off-the-record).
+
+### naver crash: subsystem bisection (2026-09-14, option 1 continued)
+
+To pin WHICH browser subsystem writes {0,-1}, ran a bisection (all single-process,
+off-the-record build; the VM is not confounded -- the negative cases below prove
+it, and naver reproduces deterministically):
+  - Local 2 MB JS, 60,000 unique identifiers (file://, max string-table pressure,
+    NO network): NO crash. => not parse volume / string-table size alone.
+  - Same 2 MB JS over HTTP (one network request + heavy parse): NO crash.
+    => not "any network".
+  - example.com (static, https): NO crash. daum.net (another heavy https portal):
+    NO crash. => not general heavy-https.
+  - news.naver.com (https, hundreds of concurrent subresources): CRASH, every time,
+    same V8 string-table stack (BackgroundCompileTask + PartitionRoot::Alloc).
+  - off-the-record (in-memory storage, no on-disk leveldb/cache): still CRASH.
+  - multi-process: NO crash.
+Conclusion: the trigger is naver-SPECIFIC heavy concurrent load -- many subresources
+fetched concurrently WHILE V8 background-parses naver's specific JS -- in a single
+address space. A browser-side thread (network-service-class, active for the
+concurrent fetches; NOT on-disk storage, NOT parse volume) writes {ptr=0,
+u64=0xffffffffffffffff} to the start of a PartitionAlloc slot that happens to hold
+the renderer's V8 AstValueFactory string-table backing, corrupting entry[0]
+(exists bit set, null key) -> deterministic crash. Isolating the renderer
+(multi-process) removes it.
+
+Pinning the exact subsystem/line further needs either ASAN (large/uncertain on
+Haiku arm64) or a live write-catch (intractable: dynamic hot victim, async one-shot
+foreign write, no gdb/watchpoint timing on the guest). Practical fix remains
+multi-process; the deep fix is finding the stray {0,-1} writer in the network/
+browser path under concurrent load.
