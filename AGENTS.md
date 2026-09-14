@@ -587,3 +587,36 @@ child-process launcher solid on Haiku and set multi-process as the default launc
 To confirm visually, boot a desktop-capable arm64 image (the renku-verify images
 boot headless -- sshd but no app_server desktop on ramfb -- so screenshots are
 black; functional proof is via DevTools as above).
+
+### Shipping multi-process (2026-09-14)
+
+--single-process was never in the port code -- only in the launch commands in this
+file. The Haiku child-process launcher is a complete first-class implementation
+(content/browser/child_process_launcher_helper_haiku.cc, 135 lines: direct launch,
+no zygote/sandbox, GlobalDescriptors fd remap, EnsureProcessTerminated reaping,
+priority, OpenFileToShare; sandbox_type.cc has the IS_HAIKU branches). So
+multi-process is already supported; the only change to ship is dropping
+--single-process from the launch.
+
+CANONICAL LAUNCH (multi-process, the fix -- use this, NOT --single-process):
+  LIBRARY_PATH=<csdir>/lib:/boot/system/lib TMPDIR=<writable> \
+  content_shell --ozone-platform=haiku --no-sandbox \
+    --disable-gpu --in-process-gpu --disable-gpu-compositing \
+    --user-data-dir=<writable>
+(With --in-process-gpu the viz/display compositor runs in the browser process and
+presents through the ozone Haiku surface exactly as in single-process, so the
+present-to-BWindow path is unchanged; only the renderer runs in its own process.)
+
+Regression (multi-process, DevTools /json confirms the renderer loaded each page
+with no crash): news.naver.com -> title "네이버 뉴스"; www.google.com -> page
+target present. No V8 stomp, no font_cache CHECK. The native BeAPI toolbar is drawn
+by the browser process (shim/ozone) and the page by the renderer, matching real
+Chromium's split, so multi-process is compatible with the native toolbar.
+
+Not yet done: (1) VISUAL confirmation of the composited page in the BWindow --
+blocked because the renku-verify images boot headless (no app_server desktop on
+ramfb; screenshots are black) and the desktop-capable gen-arm64 anyboot hangs at
+the boot splash in this QEMU config; needs a desktop-capable arm64 image or
+on-device (renku-arm64) verification. (2) The exact browser subsystem doing the
+{0,-1} stray write in single-process (needs ASAN, unavailable on Haiku) -- not
+required now that multi-process avoids it.
