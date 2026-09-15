@@ -88,6 +88,7 @@ class HaikuWindow : public PlatformWindow {
   // Called on the UI thread, posted from the window thread.
   void OnEventFromWindowThread(std::unique_ptr<Event> event);
   void OnBoundsChangedFromWindowThread(const gfx::Rect& bounds);
+  void OnSizeChangedFromWindowThread(const gfx::Size& size);
   void OnCloseRequestedFromWindowThread();
   void OnActivationChangedFromWindowThread(bool active);
 

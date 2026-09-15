@@ -26,6 +26,7 @@
 #include "ui/aura/window.h"
 #include "ui/aura/window_event_dispatcher.h"
 #include "ui/aura/window_tree_host.h"
+#include "ui/aura/window_tree_host_observer.h"
 #include "ui/ozone/platform/haiku/haiku_toolbar_bridge.h"
 #include "url/gurl.h"
 
@@ -71,6 +72,21 @@ class ShellToolbarObserver final : public ui::HaikuToolbarObserver {
   raw_ptr<Shell> shell_;
 };
 
+// content_shell's own FillLayout sizes the WebContents windows to the host
+// only once, at creation (the upstream shell is never resized by a user), so
+// a BWindow resize would leave the page at its original size. Follow every
+// host resize by refitting each child window to the host.
+class HostResizeObserver : public aura::WindowTreeHostObserver {
+ public:
+  void OnHostResized(aura::WindowTreeHost* host) override {
+    aura::Window* root = host->window();
+    const gfx::Rect fill(root->bounds().size());
+    for (aura::Window* child : root->children()) {
+      child->SetBounds(fill);
+    }
+  }
+};
+
 }  // namespace
 
 struct ShellPlatformDelegate::ShellData {
@@ -84,15 +100,21 @@ struct ShellPlatformDelegate::ShellData {
 
 struct ShellPlatformDelegate::PlatformData {
   std::unique_ptr<ShellPlatformDataAura> aura;
+  HostResizeObserver resize_observer;
 };
 
 ShellPlatformDelegate::ShellPlatformDelegate() = default;
-ShellPlatformDelegate::~ShellPlatformDelegate() = default;
+ShellPlatformDelegate::~ShellPlatformDelegate() {
+  if (platform_ && platform_->aura) {
+    platform_->aura->host()->RemoveObserver(&platform_->resize_observer);
+  }
+}
 
 void ShellPlatformDelegate::Initialize(const gfx::Size& default_window_size) {
   platform_ = std::make_unique<PlatformData>();
   platform_->aura =
       std::make_unique<ShellPlatformDataAura>(default_window_size);
+  platform_->aura->host()->AddObserver(&platform_->resize_observer);
 }
 
 void ShellPlatformDelegate::CreatePlatformWindow(
@@ -101,9 +123,15 @@ void ShellPlatformDelegate::CreatePlatformWindow(
   DCHECK(!shell_data_map_.contains(shell));
   ShellData& shell_data = shell_data_map_[shell];
 
-  platform_->aura->ResizeWindow(initial_size);
-
+  // All shells share the one host window. Upstream resizes it with
+  // ResizeWindow(), i.e. gfx::Rect(size) at (0,0): a new window opened from a
+  // link would yank the BWindow back to the top-left corner, tab off screen.
+  // Keep the origin where the user left it and only apply the size.
   aura::WindowTreeHost* host = platform_->aura->host();
+  gfx::Rect bounds = host->GetBoundsInPixels();
+  bounds.set_size(initial_size);
+  host->SetBoundsInPixels(bounds);
+
   shell_data.window = host->window();
   shell_data.widget = host->GetAcceleratedWidget();
   shell_data.toolbar_observer = std::make_unique<ShellToolbarObserver>(shell);

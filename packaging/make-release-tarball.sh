@@ -1,0 +1,31 @@
+#!/bin/sh
+#
+# Packs a deployable content_shell directory into the release tarball that
+# install.py downloads. Run on the build host (macOS/Linux).
+#
+# Usage: packaging/make-release-tarball.sh <dir-with-content_shell> [out-dir]
+#
+# <dir> must hold: content_shell, content_shell.pak, icudtl.dat,
+# snapshot_blob.bin, v8_context_snapshot.bin, locales/, and
+# lib/libchromium_haiku.so + lib/libtest_trace_processor.so (both DT_NEEDED).
+# The app icon (assets/rchromium.hvif) is added automatically.
+set -e
+SRC=${1:?source dir}
+OUT=${2:-.}
+HERE=$(cd "$(dirname "$0")/.." && pwd)
+NAME=rchromium-arm64
+for f in content_shell content_shell.pak icudtl.dat snapshot_blob.bin \
+         v8_context_snapshot.bin locales lib/libchromium_haiku.so \
+         lib/libtest_trace_processor.so; do
+	[ -e "$SRC/$f" ] || { echo "missing $SRC/$f" >&2; exit 1; }
+done
+STAGE=$(mktemp -d)
+mkdir -p "$STAGE/RChromium"
+cp -R "$SRC"/. "$STAGE/RChromium/"
+rm -f "$STAGE"/RChromium/*.log
+cp "$HERE/assets/rchromium.hvif" "$STAGE/RChromium/"
+mkdir -p "$OUT"
+tar -C "$STAGE" -czf "$OUT/$NAME.tar.gz" RChromium
+(cd "$OUT" && shasum -a 256 "$NAME.tar.gz" > "$NAME.tar.gz.sha256")
+rm -rf "$STAGE"
+ls -la "$OUT/$NAME.tar.gz" "$OUT/$NAME.tar.gz.sha256"

@@ -2,85 +2,52 @@
 
 **English** | [日本語](README.ja.md) | [한국어](README.ko.md)
 
-A native Haiku/AArch64 build of Chromium's `content_shell` wrapped in a
-hand-written BeAPI toolbar, so it runs on Apple Silicon (and arm64 hardware) at
-native speed rather than emulating x86. This is the end-user install and run
-guide.
-
-Build, architecture, and porting internals are in [`AGENTS.md`](AGENTS.md).
+Chromium running natively on Haiku/AArch64 -- Apple Silicon and other arm64
+machines -- with a BeAPI toolbar: back/forward/reload, an address field, and
+bookmarks. It runs on the RENKU arm64 image (Haiku arm64 with the TLSDESC
+loader patch); stock Haiku arm64 images cannot load it.
 
 ![R Chromium rendering news.naver.com on the Haiku arm64 desktop](docs/images/screenshot-naver.png)
 
-*news.naver.com rendered on the RENKU (Haiku arm64) desktop with the native
-BeAPI toolbar. Captured from the QEMU/HVF VM on an Apple Silicon Mac.*
+## Install
 
-## Requirements
-
-- **Haiku on AArch64** -- the real renku-arm64 desktop (booted on Apple Silicon
-  under QEMU/HVF, or arm64 hardware).
-- **`A0001` runtime_loader TLSDESC patch in the image.** clang emits
-  `R_AARCH64_TLSDESC` relocations that a stock Haiku loader cannot resolve, so
-  the binary will not load without it. The patch is
-  `haiku_kernel_patches/A0001-arm64-runtime-loader-tlsdesc.patch`; grafting it
-  into an existing image's `haiku.hpkg` is described in [`AGENTS.md`](AGENTS.md).
-- **The standard Haiku fonts.** Text is shaped and rasterised against the system
-  fonts; the stock RENKU/Haiku font set is enough (Korean on news.naver.com
-  renders with it).
-
-## Installing and running on the device
-
-### Deploy
-
-Put the binary, its resources, and the BeAPI shim (`libchromium_haiku.so`)
-together, e.g. under a `cs/` directory on any writable BFS volume:
-
-```
-cs/content_shell                 # the binary
-cs/content_shell.pak             # resources ...
-cs/icudtl.dat
-cs/snapshot_blob.bin
-cs/v8_context_snapshot.bin
-cs/locales/
-cs/lib/libchromium_haiku.so      # the native BeAPI toolbar shim
-```
-
-### Run
-
-`content_shell` needs the shim (`DT_NEEDED: libchromium_haiku`), so point the
-loader at `cs/lib`. No launch flags are needed -- the build enables software
-compositing on Haiku by itself:
+Open Terminal on the device and paste this one line:
 
 ```sh
-cd cs
-LIBRARY_PATH=$(pwd)/lib:/boot/system/lib ./content_shell https://news.naver.com
+python3 -c "import urllib.request as u;exec(u.urlopen('https://raw.githubusercontent.com/rainygirl/haiku-rchromium-arm64/main/install.py').read())"
 ```
 
-A native Haiku window opens with the toolbar and the page rendered below it.
+It downloads the latest release (about 110 MB), installs it into
+`~/config/non-packaged/apps/RChromium/`, adds **R Chromium** to
+**Deskbar -> Applications** and the Desktop, and adds an `rchromium` command.
+You need about 350 MB free on `/boot`.
 
-### Using the browser
+From a checkout of this repository, `./install.sh` does the same.
 
-The toolbar across the top of the window is drawn with BeAPI controls:
+## Run
+
+Double-click **R Chromium** on the Desktop, or pick it from
+**Deskbar -> Applications**. From Terminal:
+
+```sh
+rchromium https://news.naver.com
+```
 
 - **Back / Forward / Reload** -- icon buttons on the left; Reload turns into Stop
   while a page is loading.
-- **Address field** -- type a URL and press Enter to navigate; a bare
-  `example.com` is treated as `https://example.com`. The field tracks the
-  current page's URL.
-- **Add bookmark (star)** -- files the current page into the bookmarks store
-  under a date group ("Today", ...).
-- **Show bookmarks** -- opens a searchable bookmarks window; double-click an
-  entry to open it.
+- **Address field** -- type a URL and press Enter; a bare `example.com` opens
+  `https://example.com`.
+- **Star** -- bookmarks the current page under a date group ("Today", ...).
+- **Menu** -- opens a searchable bookmarks window; double-click an entry to
+  open it.
 
-### Known limits and troubleshooting
+## Uninstall
 
-- **`libchromium_haiku.so: Troubles handling dynamic section` at launch** -- the
-  shim was not linked with 4 KB pages. Use the shim from a correct build (the
-  relink flag and reason are in [`AGENTS.md`](AGENTS.md)).
-- **`Bad data relocating` / the binary refuses to load** -- the image's loader
-  lacks the `A0001` TLSDESC patch (see Requirements).
-- news.naver.com and other pages render fully with the native toolbar,
-  address-bar navigation, and bookmarks. The full verification history and the
-  known rough edges are in [`AGENTS.md`](AGENTS.md).
+```sh
+python3 -c "import urllib.request as u;exec(u.urlopen('https://raw.githubusercontent.com/rainygirl/haiku-rchromium-arm64/main/install.py').read())" --uninstall
+```
+
+or `./install.sh --uninstall` from a checkout.
 
 ## AI disclosure
 

@@ -791,12 +791,18 @@ class ShimWindow : public BWindow, public NativeWindow {
       // Borderless is a window_look, not a window_type: the window_type enum
       // has no undecorated member, so this takes the look/feel constructor
       // and names the decoration directly.
-      : BWindow(frame,
+      // `frame` is the CONTENT rect Chromium asked for. With a toolbar the
+      // window is taller by kChromeHeight so the content view gets exactly
+      // that size, and every frame reported back (FrameMoved, GetWindowFrame)
+      // is the content rect again -- Chromium never sees the toolbar strip.
+      : BWindow(WindowFrameForContent(frame, with_toolbar),
                 "Chromium",
                 has_frame ? B_TITLED_WINDOW_LOOK : B_NO_BORDER_WINDOW_LOOK,
                 B_NORMAL_WINDOW_FEEL,
                 B_ASYNCHRONOUS_CONTROLS),
-        delegate_(delegate) {
+        delegate_(delegate),
+        has_frame_(has_frame),
+        with_toolbar_(with_toolbar) {
     // The content view is built already inset below the toolbar, so it reports
     // one correct size to Chromium instead of a mid-resize sequence. (The x86
     // port instead insets an already-shown view and had to pin it
@@ -812,6 +818,9 @@ class ShimWindow : public BWindow, public NativeWindow {
     }
     view_ = new ShimView(content, delegate);
     AddChild(view_);
+    // Chromium places its first window at (0,0), which puts a titled
+    // window's tab above the screen edge where nobody can see or grab it.
+    KeepDecorOnScreen();
     // BWindow's constructor leaves the looper locked and does not start its
     // thread; Run() spawns it and drops the lock. Show() asserts the looper is
     // locked, so running here is what makes a later Show() safe.
@@ -826,8 +835,8 @@ class ShimWindow : public BWindow, public NativeWindow {
   void WindowActivated(bool active) { delegate_->OnActivated(active); }
 
   void FrameMoved(BPoint origin) {
-    BRect f = Frame();
-    delegate_->OnFrameMoved(origin.x, origin.y, f.Width() + 1, f.Height() + 1);
+    BRect c = ContentFrame();
+    delegate_->OnFrameMoved(c.left, c.top, c.Width() + 1, c.Height() + 1);
   }
 
   // NativeWindow:
@@ -854,8 +863,11 @@ class ShimWindow : public BWindow, public NativeWindow {
     if (!LockLooper()) {
       return;
     }
-    MoveTo(x, y);
-    ResizeTo(width - 1, height - 1);
+    BRect f = WindowFrameForContent(BRect(x, y, x + width - 1, y + height - 1),
+                                    with_toolbar_);
+    MoveTo(f.left, f.top);
+    ResizeTo(f.Width(), f.Height());
+    KeepDecorOnScreen();
     UnlockLooper();
   }
 
@@ -864,11 +876,11 @@ class ShimWindow : public BWindow, public NativeWindow {
     if (!LockLooper()) {
       return;
     }
-    BRect f = Frame();
-    out_xywh[0] = f.left;
-    out_xywh[1] = f.top;
-    out_xywh[2] = f.Width() + 1;
-    out_xywh[3] = f.Height() + 1;
+    BRect c = ContentFrame();
+    out_xywh[0] = c.left;
+    out_xywh[1] = c.top;
+    out_xywh[2] = c.Width() + 1;
+    out_xywh[3] = c.Height() + 1;
     UnlockLooper();
   }
 
@@ -961,8 +973,56 @@ class ShimWindow : public BWindow, public NativeWindow {
 
  private:
   Delegate* delegate_;
+  // Window frame (screen coords) for a content rect: the toolbar strip sits
+  // above the content, inside the same window, so the frame starts
+  // kChromeHeight higher and the content keeps its own origin.
+  static BRect WindowFrameForContent(BRect content, bool with_toolbar) {
+    if (with_toolbar) {
+      content.top -= kChromeHeight;
+    }
+    return content;
+  }
+
+  // The content view's rect in screen coordinates. Must hold the looper lock.
+  BRect ContentFrame() {
+    BRect f = Frame();
+    if (with_toolbar_) {
+      f.top += kChromeHeight;
+    }
+    return f;
+  }
+
+  // Moves a decorated window down/right so its tab and border are on screen.
+  // Must hold the looper lock. FrameMoved() reports the result to Chromium.
+  void KeepDecorOnScreen() {
+    if (!has_frame_) {
+      return;
+    }
+    float tab_height = 25.0f;
+    float border = 5.0f;
+    BMessage settings;
+    if (GetDecoratorSettings(&settings) == B_OK) {
+      BRect tab;
+      if (settings.FindRect("tab frame", &tab) == B_OK && tab.IsValid()) {
+        tab_height = tab.Height() + 1;
+      }
+      float b;
+      if (settings.FindFloat("border width", &b) == B_OK && b > 0) {
+        border = b;
+      }
+    }
+    BRect f = Frame();
+    float x = f.left < border ? border : f.left;
+    float y = f.top < tab_height + border ? tab_height + border : f.top;
+    if (x != f.left || y != f.top) {
+      MoveTo(x, y);
+    }
+  }
+
   ShimView* view_ = NULL;
   BrowserChromeView* chrome_ = NULL;
+  bool has_frame_ = false;
+  bool with_toolbar_ = false;
 };
 
 }  // namespace

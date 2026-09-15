@@ -277,6 +277,14 @@ void HaikuWindow::OnBoundsChangedFromWindowThread(const gfx::Rect& bounds) {
   delegate_->OnBoundsChanged({origin_changed});
 }
 
+void HaikuWindow::OnSizeChangedFromWindowThread(const gfx::Size& size) {
+  if (bounds_.size() == size) {
+    return;
+  }
+  bounds_.set_size(size);
+  delegate_->OnBoundsChanged({/*origin_changed=*/false});
+}
+
 void HaikuWindow::OnCloseRequestedFromWindowThread() {
   delegate_->OnCloseRequest();
 }
@@ -327,6 +335,9 @@ void HaikuWindow::SetToolbarAddress(const std::string& url) {
 void HaikuWindow::SetToolbarTitle(const std::string& title) {
   if (window_) {
     window_->SetPageTitleText(title.c_str());
+    // content_shell's aura path never calls PlatformWindow::SetTitle, so the
+    // BWindow tab would read "Chromium" forever; show the page title there.
+    window_->SetWindowTitle(title.empty() ? "R Chromium" : title.c_str());
   }
 }
 

@@ -312,12 +312,200 @@ speed on Apple Silicon (and arm64 hardware) rather than emulating x86, with a
 hand-written BeAPI toolbar (address bar, back/forward/reload, bookmarks) drawn by
 the ozone layer. news.naver.com and other pages render fully.
 
-Install/run in brief: the image needs the `A0001` TLSDESC loader patch and the
-standard Haiku fonts; put `content_shell`, its resources, and
-`lib/libchromium_haiku.so` in one directory and launch with
-`LIBRARY_PATH=$(pwd)/lib:/boot/system/lib ./content_shell <URL>`. No launch flags
-are needed -- the build enables in-process software compositing on Haiku itself.
-The end-user guide is in `README.md` (English), with translations in `README.ja.md` and `README.ko.md`; build steps and internals are below.
+End users install it with the one-line `install.py` command in `README.md`
+(English; `README.ja.md` and `README.ko.md` are translations). The README is
+deliberately usage-only; everything else -- requirements, the release tarball,
+the launcher flags, manual deployment, troubleshooting -- is in the next
+section, and build steps and porting internals follow.
+
+## Window title bar and resizing (fixed 2026-09-15)
+
+The x86 port's two visible window bugs were reproduced on arm64 and fixed
+here; the causes are the same on both.
+
+**No title bar / title bar gone after a link opens a new window.** The window
+was never undecorated: content_shell's `ShellPlatformDataAura` creates the one
+shared host window with `properties.bounds = gfx::Rect(initial_size)`, i.e. at
+(0,0), and Haiku draws the tab *above* the frame -- off the top of the screen.
+Every new Shell (a link with `target=_blank`, `window.open`) then called
+`ResizeWindow(size)` = `SetBoundsInPixels(gfx::Rect(size))`, which yanked the
+window back to (0,0) if the user had moved it. Fixes:
+- `haiku_shim.cc` `ShimWindow::KeepDecorOnScreen()` (constructor and
+  `SetWindowBounds`): a decorated window is moved so its tab and border are on
+  screen, using `GetDecoratorSettings()` ("tab frame", "border width") with
+  25/5 px fallbacks; `FrameMoved` reports the result back.
+- `shell_platform_delegate_haiku.cc` `CreatePlatformWindow`: keeps the host's
+  current origin and applies only the size instead of `ResizeWindow()`.
+- `haiku_window.cc` `SetToolbarTitle`: also sets the BWindow title (aura
+  content_shell never calls `PlatformWindow::SetTitle`), so the tab shows the
+  page title instead of "Chromium".
+Note all Shells share one BWindow: a "new window" is a second WebContents
+stacked in the same window, which is the upstream aura content_shell model.
+
+**Resizing the window did not resize the page** (renderer stayed 800x600; the
+toolbar re-laid out, the content did not). Cause: upstream `FillLayout` in
+`shell_platform_data_aura.cc` fits children to the host *once*
+(`has_bounds_`), because nobody resizes the upstream shell by hand. Fix: a
+`HostResizeObserver` (`aura::WindowTreeHostObserver::OnHostResized`) in the
+Haiku delegate refits every child of the root window to the host size. The
+ozone side also got `HaikuWindow::OnSizeChangedFromWindowThread`: the shim's
+`FrameResized` only knows the new size, and the old path posted a rect at
+(0,0), silently corrupting the tracked origin on every resize.
+
+**Frame accounting.** The shim now treats the rect Chromium passes as the
+*content* rect: the BWindow is `kChromeHeight` (30 px) taller so the content
+view is exactly that size, and `FrameMoved`/`GetWindowFrame` report the
+content rect (origin below the toolbar). Before, Chromium believed the content
+was 800x600 while the view was 800x570, so the bottom 30 px of every page were
+cut off.
+
+How it was verified: `--remote-debugging-port=9222` + an ssh tunnel + a
+40-line raw-websocket CDP client (`Runtime.evaluate` of
+`[innerWidth, innerHeight]`) before and after a QMP corner drag; `window.open`
+from CDP for the new-window case; QMP screendumps for the tab.
+
+## End-user install: install.py, the release tarball, and the launcher
+
+### Requirements on the device
+
+- **Haiku on AArch64** -- the real renku-arm64 desktop (booted on Apple Silicon
+  under QEMU/HVF, or arm64 hardware).
+- **`A0001` runtime_loader TLSDESC patch in the image.** clang emits
+  `R_AARCH64_TLSDESC` relocations that a stock Haiku loader cannot resolve, so
+  the binary will not load without it. The patch is
+  `haiku_kernel_patches/A0001-arm64-runtime-loader-tlsdesc.patch`; grafting it
+  into an existing image's `haiku.hpkg` is described under "TLSDESC" below.
+- **The standard Haiku fonts.** Text is shaped and rasterised against the system
+  fonts; the stock RENKU/Haiku font set is enough (Korean on news.naver.com
+  renders with it).
+- **python3** (in the base image). The minimal RENKU image has no `curl`,
+  `wget`, `tar`, `grep` or `sed`, which is why the one-liner and the installer
+  are Python (`urllib` + `tarfile` + `hashlib`), not a `curl | sh`.
+- About 350 MB free on the target volume (the unpacked tree is ~335 MB; the
+  installer downloads next to the install dir and deletes the old copy before
+  unpacking so it never needs two copies at once).
+
+### What install.py does
+
+`install.py` (thin wrapper: `install.sh`) downloads
+`rchromium-arm64.tar.gz` from the latest GitHub release of
+`rainygirl/haiku-rchromium-arm64`, verifies it against the `.sha256` published
+next to it, unpacks it into `~/config/non-packaged/apps/RChromium/`, and then:
+
+1. writes a launcher script `RChromium/R Chromium` (see "Launcher flags"),
+2. stamps `rchromium.hvif` on it as `BEOS:ICON` (`addattr -t icon`) -- stock
+   `content_shell` has no signature or icon resources, and Tracker/Deskbar show
+   the attribute through the symlinks,
+3. symlinks the launcher to `~/config/non-packaged/data/deskbar/menu/Applications/R Chromium`,
+   `~/Desktop/R Chromium`, and `~/config/non-packaged/bin/rchromium`.
+
+Tracker runs an executable script on double-click (verified on the VM: the
+Desktop link launches, and the team shows up in Deskbar as "R Chromium").
+`--uninstall` removes the three links and the app dir; `--prefix DIR`,
+`--file TARBALL` and `--url URL` exist for testing (`--prefix /chromium/RChromium`
+on the test VM, whose `/boot` is a 450 MB volume). Arguments after the
+`python3 -c "..."` one-liner reach the script through `sys.argv` as usual.
+
+### Release tarball
+
+`packaging/make-release-tarball.sh <dir> [out]` packs a deployable directory
+into `rchromium-arm64.tar.gz` + `.sha256` (top-level dir `RChromium/`):
+
+```
+RChromium/content_shell
+RChromium/content_shell.pak
+RChromium/icudtl.dat
+RChromium/snapshot_blob.bin            # must match the content_shell build
+RChromium/v8_context_snapshot.bin      # ditto
+RChromium/locales/en-US.pak
+RChromium/lib/libchromium_haiku.so     # the BeAPI shim, 4 KB-page relinked
+RChromium/lib/libtest_trace_processor.so   # DT_NEEDED by content_shell
+RChromium/rchromium.hvif               # from assets/, added by the script
+```
+
+Publish it as the two assets of a GitHub release; `install.py` fetches
+`releases/latest/download/rchromium-arm64.tar.gz`, so the asset name is fixed
+and the release must not be a draft/pre-release.
+
+Which binary is in the release (2026-09-15, second cut): `content_shell`
+linked in the M4 `haiku-builder` container from the current tree (the 2026-09-14
+tree with the baked kInProcessGPU/kDisableGpu switches) plus the title-bar and
+resize fixes above -- sha256
+b0596a943272aa0d10c505588ad669bb300114fe8f37f74cdc181c2ccbbddb71, 323727816
+bytes -- with the shim rebuilt from `haiku_shim/haiku_shim.cc` (sha256
+e4b9ba3cc22db572307005bdfd31abf0b1a29b075b8cb4faef7b6359b693ac7f, 325344
+bytes; build script: the compile/link lines under "SHIM LOAD FIX" below, i.e.
+`aarch64-unknown-haiku-g++ -O2 -fPIC -c` then `-shared ... -Wl,-z,max-page-size=0x1000`).
+The pak/icudtl/snapshot files are byte-identical between the 09-13 and 09-14
+builds, so the resources in the tarball are unchanged.
+
+History of that choice: the first cut shipped the 2026-09-13 binary from the
+test VM (sha256 not recorded, 323726096 bytes) because the 09-14 build had
+failed once on the VM in the launcher's `--single-process` mode (FATAL in
+`base/types/expected_internal.h:310` right after
+`platform_shared_memory_region_posix.cc: fcntl(0, F_GETFL) failed: Bad file
+descriptor`) and showed a blank page in its intended no-flag multi-process
+mode. The rebuilt 09-15 binary (same tree + fixes) then ran the full
+single-process test sequence without that crash, so the fd-0 failure is
+intermittent, not deterministic -- keep an eye on it (fd 0 handling; see
+`port-message-pump.py` and the `MessagePumpEpoll ... fd 0` note above). The
+multi-process blank page on this VM is still real and is why the launcher uses
+`--single-process`.
+
+### Launcher flags
+
+The launcher execs
+`content_shell --ozone-platform=haiku --no-sandbox --single-process --disable-gpu --in-process-gpu --disable-gpu-compositing "$@"`
+from the app dir with
+`LIBRARY_PATH=%A/lib:~/config/non-packaged/lib:~/config/lib:/boot/system/non-packaged/lib:/boot/system/lib`
+(`%A/lib` is how the runtime loader finds the shim next to the binary).
+
+Why every flag, measured on the VM with the release binary:
+- no flags: the display compositor runs in a separate viz process, which has no
+  window manager -> `CHECK(surface_ozone)` FATAL (the crash analysed under
+  "naver crash SOLVED" below);
+- `--in-process-gpu --disable-gpu` only (multi-process renderers): no crash,
+  page finishes loading, but the content area stays white -- frames are not
+  delivered to the BWindow from out-of-process renderers on this build;
+- the full set with `--single-process`: news.naver.com renders completely.
+  (Passing these to a binary that already bakes the switches is harmless: the
+  baked code checks `HasSwitch` first.)
+
+### Manual deployment (without install.py)
+
+Put the binary, its resources, and the shim together on any writable BFS
+volume, e.g. `cs/`:
+
+```
+cs/content_shell                 # the binary
+cs/content_shell.pak             # resources ...
+cs/icudtl.dat
+cs/snapshot_blob.bin
+cs/v8_context_snapshot.bin
+cs/locales/
+cs/lib/libchromium_haiku.so      # the native BeAPI toolbar shim
+cs/lib/libtest_trace_processor.so
+```
+
+then `cd cs && LIBRARY_PATH=$(pwd)/lib:/boot/system/lib ./content_shell <flags> <URL>`
+with the launcher flags above. On the test VM `/boot` is tiny, so also point
+`TMPDIR` at a writable volume.
+
+### Troubleshooting
+
+- **`libchromium_haiku.so: Troubles handling dynamic section` at launch** -- the
+  shim was not linked with 4 KB pages. Relink with
+  `-Wl,-z,max-page-size=0x1000` (see the shim-load section below).
+- **`Bad data relocating` / the binary refuses to load** -- the image's loader
+  lacks the `A0001` TLSDESC patch.
+- **`install.py` fails with "No space left on device"** -- ~350 MB is needed on
+  the volume holding the prefix, and the Desktop/Deskbar links need a few KB on
+  `/boot`. On the test VM, stale `core-*` dumps on the Desktop were what filled
+  `/boot`.
+- **Window opens, content stays white** -- the launcher flags were bypassed
+  (e.g. the binary was run directly); use `rchromium` or the Desktop link.
+- **Black QMP screenshot** -- the VM's screen blanker; an `input-send-event`
+  mouse move wakes it.
 
 ## Repository layout
 

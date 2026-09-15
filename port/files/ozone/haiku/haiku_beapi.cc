@@ -198,11 +198,12 @@ void HaikuEventBridge::OnKey(bool pressed,
 }
 
 void HaikuEventBridge::OnViewResized(float width, float height) {
-  gfx::Rect bounds(0, 0, static_cast<int>(width) + 1,
-                   static_cast<int>(height) + 1);
+  // BView::FrameResized hands over the new width/height in Be's inclusive
+  // pixel convention; the origin is unknown here and stays what it was.
+  gfx::Size size(static_cast<int>(width) + 1, static_cast<int>(height) + 1);
   ui_task_runner_->PostTask(
-      FROM_HERE, base::BindOnce(&HaikuWindow::OnBoundsChangedFromWindowThread,
-                                window_, bounds));
+      FROM_HERE, base::BindOnce(&HaikuWindow::OnSizeChangedFromWindowThread,
+                                window_, size));
 }
 
 void HaikuEventBridge::OnQuitRequested() {
