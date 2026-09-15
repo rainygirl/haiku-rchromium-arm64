@@ -1,11 +1,18 @@
 # R Chromium -- arm64 (AArch64)
 
+**English** | [日本語](README.ja.md) | [한국어](README.ko.md)
+
 A native Haiku/AArch64 build of Chromium's `content_shell` wrapped in a
 hand-written BeAPI toolbar, so it runs on Apple Silicon (and arm64 hardware) at
 native speed rather than emulating x86. This is the end-user install and run
 guide.
 
 Build, architecture, and porting internals are in [`AGENTS.md`](AGENTS.md).
+
+![R Chromium rendering news.naver.com on the Haiku arm64 desktop](docs/images/screenshot-naver.png)
+
+*news.naver.com rendered on the RENKU (Haiku arm64) desktop with the native
+BeAPI toolbar. Captured from the QEMU/HVF VM on an Apple Silicon Mac.*
 
 ## Requirements
 
