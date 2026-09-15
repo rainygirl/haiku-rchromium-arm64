@@ -81,3 +81,7 @@ The toolbar across the top of the window is drawn with BeAPI controls:
 - news.naver.com and other pages render fully with the native toolbar,
   address-bar navigation, and bookmarks. The full verification history and the
   known rough edges are in [`AGENTS.md`](AGENTS.md).
+
+## AI disclosure
+
+This program was written with Claude.

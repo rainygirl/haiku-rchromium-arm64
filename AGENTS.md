@@ -317,7 +317,7 @@ standard Haiku fonts; put `content_shell`, its resources, and
 `lib/libchromium_haiku.so` in one directory and launch with
 `LIBRARY_PATH=$(pwd)/lib:/boot/system/lib ./content_shell <URL>`. No launch flags
 are needed -- the build enables in-process software compositing on Haiku itself.
-The end-user guide is in `README.md`; build steps and internals are below.
+The end-user guide is in `README.md` (English), with translations in `README.ja.md` and `README.ko.md`; build steps and internals are below.
 
 ## Repository layout
 
