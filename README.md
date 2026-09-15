@@ -4,7 +4,8 @@
 
 Chromium running natively on Haiku/AArch64 -- Apple Silicon and other arm64
 machines -- with a BeAPI toolbar: back/forward/reload, an address field, and
-bookmarks. It runs on the RENKU arm64 image (Haiku arm64 with the TLSDESC
+bookmarks. Noto Sans CJK is bundled, so Korean, Japanese and Chinese pages
+render without extra fonts. It runs on the RENKU arm64 image (Haiku arm64 with the TLSDESC
 loader patch); stock Haiku arm64 images cannot load it.
 
 ![R Chromium rendering news.naver.com on the Haiku arm64 desktop](docs/images/screenshot-naver.png)
@@ -17,10 +18,10 @@ Open Terminal on the device and paste this one line:
 python3 -c "import urllib.request as u;exec(u.urlopen('https://raw.githubusercontent.com/rainygirl/haiku-rchromium-arm64/main/install.py').read())"
 ```
 
-It downloads the latest release (about 110 MB), installs it into
+It downloads the latest release (about 140 MB), installs it into
 `~/config/non-packaged/apps/RChromium/`, adds **R Chromium** to
 **Deskbar -> Applications** and the Desktop, and adds an `rchromium` command.
-You need about 350 MB free on `/boot`.
+You need about 400 MB free on `/boot`.
 
 From a checkout of this repository, `./install.sh` does the same.
 

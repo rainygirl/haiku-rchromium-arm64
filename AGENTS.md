@@ -364,6 +364,75 @@ How it was verified: `--remote-debugging-port=9222` + an ssh tunnel + a
 `[innerWidth, innerHeight]`) before and after a QMP corner drag; `window.open`
 from CDP for the new-window case; QMP screendumps for the tab.
 
+## fd 0 closed under the browser: the intermittent naver crash (fixed 2026-09-15)
+
+Symptom (2026-09-14/15 builds, single-process launcher, heavy pages): a few
+seconds into news.naver.com,
+
+    MessagePumpEpoll: unhandled poll revents 0x1000 on fd 0   (POLLNVAL)
+    net_errors_posix.cc: Socket operation on non-socket
+    platform_shared_memory_region_posix.cc: fcntl(0, F_GETFL) failed: Bad file descriptor
+    FATAL base/types/expected_internal.h:310 Check failed: state_ == State::kValue
+
+Root cause, caught with Haiku's strace (`strace -s -i -e
+close,open,socket,socketpair,dup,dup2,create_pipe,accept -o log ./content_shell
+...`; syscall names are given WITHOUT the `_kern_` prefix): 78 `close(0)` calls
+in ~90 s, each from the thread that had just read
+`/boot/system/settings/network/resolv.conf` and `hostname`, each paired with a
+second `close(<stale number>)`. That is `res_nclose()` after `res_ninit()`.
+Chromium memsets a `struct __res_state` to zero and calls `res_ninit()`;
+glibc/BSD set `_vcsock` and `_u._ext.nssocks[]` to -1 there, Haiku's libbind
+copy does not, and its `res_nclose()` closes every slot that is not -1 -- so
+fd 0 (stdin) goes first, and afterwards whichever descriptor was most recently
+handed out as 0 (a net socket, then a shared-memory file) is closed under its
+owner. Two callers:
+- `net/dns/dns_reloader.cc` (`DnsReloader`, per getaddrinfo call, per thread:
+  `res_nclose`+`res_ninit` on every resolver-generation change) -- now
+  compiled out on Haiku (`USE_RES_NINIT` excludes `IS_HAIKU`), as it already
+  is on Android/Apple/Fuchsia; Haiku's libnetwork keeps its own state.
+- `net/dns/public/scoped_res_state.cc` (`ScopedResState`, every DNS config
+  read) -- on Haiku the destructor sets `_vcsock` and all `nssocks[]` to -1
+  before `res_nclose()`; the state never sent a query so nothing leaks.
+Both edits are in `port/port-net.py`. This also explains why earlier runs of
+the same binary sometimes survived: the race is between the resolver's stray
+close and whoever currently owns fd 0.
+
+## CJK text and the font manager (fixed 2026-09-15)
+
+Korean (and any CJK) text rendered as boxes wherever the page's first-choice
+family lacked the glyph -- naver's nav happened to resolve straight to the
+system Noto Sans CJK KR, its headlines did not. Cause: Chromium's Haiku font
+manager was Skia's `SkFontMgr_New_Custom_Directory("/boot/system/data/fonts")`
+and `SkFontMgr_Custom::onMatchFamilyStyleCharacter()` is literally
+`return nullptr;`, so Blink's per-character fallback
+(`font_cache_haiku.cc` -> `MatchFamilyStyleCharacter`) never found anything.
+Its default family was also "whatever the scanner met first" (none of Skia's
+defaults "Arial", "Verdana", ... exist on Haiku).
+
+Fix, in `skia/ext/font_utils.cc` (now recorded as
+`port/files/skia/ext/font_utils.cc`; this file, `skia/BUILD.gn`'s Haiku
+directory-manager block and
+`third_party/blink/renderer/platform/fonts/haiku/font_cache_haiku.cc` had
+only existed in the container tree before -- the latter two are still
+unrecorded drift): `HaikuFontMgr` wraps one `SkFontMgr_Custom` per font
+directory, in priority order
+`<exe dir>/fonts`, `/boot/system/data/fonts`, `/boot/system/non-packaged/data/fonts`,
+`~/config/non-packaged/data/fonts`, `~/config/data/fonts`, and implements
+`onMatchFamilyStyleCharacter`: try the requested family, then the Noto Sans
+CJK regional face for the request's BCP 47 tags (ko -> KR, ja -> JP,
+zh-Hant/TW -> TC, zh-HK/MO -> HK, other zh -> SC), then any CJK face, then
+every other family, each tested with `SkTypeface::unicharToGlyph() != 0`.
+`onLegacyMakeTypeface` falls back to "Noto Sans" before the scanner's first
+family. Web fonts (`makeFromStream` & co.) delegate to the first directory
+manager; all of them share the FreeType scanner.
+
+Bundled fonts: the release tarball carries `fonts/NotoSansCJK-Regular.ttc` and
+`fonts/NotoSansCJK-Bold.ttc` (Noto CJK OTCs from github.com/notofonts/noto-cjk,
+`Sans/OTC/`, 10 faces each: Sans + Mono for JP/KR/SC/TC/HK; ~19-20 MB apiece)
+plus `fonts/LICENSE-NotoSansCJK.txt` (SIL OFL 1.1). The RENKU image only ships
+`NotoSansCJKkr-{Regular,Bold}.otf`, so JP/SC/TC glyph variants come from the
+bundle. `packaging/make-release-tarball.sh` requires the three files.
+
 ## End-user install: install.py, the release tarball, and the launcher
 
 ### Requirements on the device
@@ -381,7 +450,7 @@ from CDP for the new-window case; QMP screendumps for the tab.
 - **python3** (in the base image). The minimal RENKU image has no `curl`,
   `wget`, `tar`, `grep` or `sed`, which is why the one-liner and the installer
   are Python (`urllib` + `tarfile` + `hashlib`), not a `curl | sh`.
-- About 350 MB free on the target volume (the unpacked tree is ~335 MB; the
+- About 400 MB free on the target volume (the unpacked tree is ~375 MB with fonts; the
   installer downloads next to the install dir and deletes the old copy before
   unpacking so it never needs two copies at once).
 
@@ -427,17 +496,22 @@ Publish it as the two assets of a GitHub release; `install.py` fetches
 `releases/latest/download/rchromium-arm64.tar.gz`, so the asset name is fixed
 and the release must not be a draft/pre-release.
 
-Which binary is in the release (2026-09-15, second cut): `content_shell`
-linked in the M4 `haiku-builder` container from the current tree (the 2026-09-14
+Which binary is in the release (2026-09-15, third cut): `content_shell`
+linked in the M4 `haiku-builder` container from the current tree (2026-09-14
 tree with the baked kInProcessGPU/kDisableGpu switches) plus the title-bar and
-resize fixes above -- sha256
-b0596a943272aa0d10c505588ad669bb300114fe8f37f74cdc181c2ccbbddb71, 323727816
-bytes -- with the shim rebuilt from `haiku_shim/haiku_shim.cc` (sha256
-e4b9ba3cc22db572307005bdfd31abf0b1a29b075b8cb4faef7b6359b693ac7f, 325344
-bytes; build script: the compile/link lines under "SHIM LOAD FIX" below, i.e.
-`aarch64-unknown-haiku-g++ -O2 -fPIC -c` then `-shared ... -Wl,-z,max-page-size=0x1000`).
-The pak/icudtl/snapshot files are byte-identical between the 09-13 and 09-14
-builds, so the resources in the tarball are unchanged.
+resize fixes, the HaikuFontMgr CJK fallback, and the resolver fd-0 fix --
+sha256 90f42b3bc925bb6b26bc049879c6bb4bf9a5f0b7991715246705f62e3f09a10f,
+323735264 bytes -- with the shim rebuilt from `haiku_shim/haiku_shim.cc`
+(sha256 e4b9ba3cc22db572307005bdfd31abf0b1a29b075b8cb4faef7b6359b693ac7f,
+325344 bytes; build lines under "SHIM LOAD FIX" below:
+`aarch64-unknown-haiku-g++ -O2 -fPIC -c` then
+`-shared ... -Wl,-z,max-page-size=0x1000`), and `fonts/` (Noto Sans CJK
+Regular+Bold OTCs + OFL license). The pak/icudtl/snapshot files are
+byte-identical across the 09-13/14/15 builds. Verified on the VM: naver
+(Korean headlines), ja.wikipedia, zh.wikipedia all render with correct glyphs,
+window resize and new windows behave, and the fd-0 crash did not recur across
+the three page loads (it reproduced 3 of the last 4 naver loads before the
+resolver fix).
 
 History of that choice: the first cut shipped the 2026-09-13 binary from the
 test VM (sha256 not recorded, 323726096 bytes) because the 09-14 build had

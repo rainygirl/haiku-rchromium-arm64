@@ -7,7 +7,9 @@
 #
 # <dir> must hold: content_shell, content_shell.pak, icudtl.dat,
 # snapshot_blob.bin, v8_context_snapshot.bin, locales/, and
-# lib/libchromium_haiku.so + lib/libtest_trace_processor.so (both DT_NEEDED).
+# lib/libchromium_haiku.so + lib/libtest_trace_processor.so (both DT_NEEDED),
+# and fonts/NotoSansCJK-{Regular,Bold}.ttc + fonts/LICENSE-NotoSansCJK.txt (the
+# bundled CJK fonts; Chromium's Haiku font manager scans <app>/fonts first).
 # The app icon (assets/rchromium.hvif) is added automatically.
 set -e
 SRC=${1:?source dir}
@@ -16,7 +18,8 @@ HERE=$(cd "$(dirname "$0")/.." && pwd)
 NAME=rchromium-arm64
 for f in content_shell content_shell.pak icudtl.dat snapshot_blob.bin \
          v8_context_snapshot.bin locales lib/libchromium_haiku.so \
-         lib/libtest_trace_processor.so; do
+         lib/libtest_trace_processor.so fonts/NotoSansCJK-Regular.ttc \
+         fonts/NotoSansCJK-Bold.ttc fonts/LICENSE-NotoSansCJK.txt; do
 	[ -e "$SRC/$f" ] || { echo "missing $SRC/$f" >&2; exit 1; }
 done
 STAGE=$(mktemp -d)

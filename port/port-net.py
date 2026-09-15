@@ -95,6 +95,41 @@ EDITS = [
      "                &res.nsaddr_list[i])),\n"
      "            UNSAFE_BUFFERS(sizeof res.nsaddr_list[i]))) {\n"),
 
+    # Haiku's resolver leaves socket slots uninitialised and res_nclose()
+    # closes anything that is not -1 (fd 0 included). See AGENTS.md,
+    # "fd 0 closed under the browser".
+    ("net/dns/dns_reloader.cc",
+     "#if defined(__RES) && __RES >= 19991006 && !BUILDFLAG(IS_APPLE) && \\\n"
+     "    !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_FUCHSIA)\n",
+     "// Haiku is also left out: its res_ninit() does not reset _vcsock and\n"
+     "// _u._ext.nssocks[] to -1, and its res_nclose() closes every slot that is\n"
+     "// not -1, so the per-lookup nclose/ninit cycle below closed fd 0 (and\n"
+     "// whatever stale number a slot held) on every DNS lookup -- taking down\n"
+     "// unrelated sockets and shared-memory descriptors under the browser.\n"
+     "// Haiku's libnetwork resolver keeps its own per-thread state, so nothing\n"
+     "// is lost by not reloading it from here.\n"
+     "#if defined(__RES) && __RES >= 19991006 && !BUILDFLAG(IS_APPLE) && \\\n"
+     "    !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_HAIKU)\n"),
+    ("net/dns/public/scoped_res_state.cc",
+     "#else\n"
+     "  res_nclose(&res_);\n"
+     "#endif  // BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_FREEBSD)\n",
+     "#else\n"
+     "#if BUILDFLAG(IS_HAIKU)\n"
+     "  // Haiku's res_ninit() leaves _vcsock and _u._ext.nssocks[] as it found\n"
+     "  // them (zero after the memset in the constructor, or stale), and its\n"
+     "  // res_nclose() closes every slot that is not -1 -- fd 0 and whatever\n"
+     "  // number a stale slot held, i.e. some unrelated live descriptor. This\n"
+     "  // state never sent a query, so no resolver socket can be open: forget\n"
+     "  // the slots before closing.\n"
+     "  res_._vcsock = -1;\n"
+     "  for (int& sock : res_._u._ext.nssocks) {\n"
+     "    sock = -1;\n"
+     "  }\n"
+     "#endif  // BUILDFLAG(IS_HAIKU)\n"
+     "  res_nclose(&res_);\n"
+     "#endif  // BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_FREEBSD)\n"),
+
     # ip_mreqn is a Linux extension: it selects a multicast interface by
     # index. Haiku has only POSIX ip_mreq, which selects by address, so the
     # index has to be resolved to one. if_indextoname plus a SIOCGIFADDR

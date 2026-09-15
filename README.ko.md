@@ -4,7 +4,8 @@
 
 Haiku/AArch64(Apple Silicon 및 기타 arm64 기기)에서 네이티브로 동작하는
 Chromium입니다. 뒤로/앞으로/새로고침, 주소 입력란, 북마크로 이루어진 BeAPI
-툴바가 붙어 있습니다. RENKU arm64 이미지(TLSDESC 로더 패치가 적용된 Haiku
+툴바가 붙어 있습니다. Noto Sans CJK를 내장해 한국어, 일본어, 중국어 페이지가
+추가 폰트 없이 표시됩니다. RENKU arm64 이미지(TLSDESC 로더 패치가 적용된 Haiku
 arm64)에서 동작하며, 순정 Haiku arm64 이미지에서는 로드되지 않습니다.
 
 ![Haiku arm64 데스크톱에서 news.naver.com을 렌더링하는 R Chromium](docs/images/screenshot-naver.png)
@@ -17,9 +18,9 @@ arm64)에서 동작하며, 순정 Haiku arm64 이미지에서는 로드되지 �
 python3 -c "import urllib.request as u;exec(u.urlopen('https://raw.githubusercontent.com/rainygirl/haiku-rchromium-arm64/main/install.py').read())"
 ```
 
-최신 릴리스(약 110 MB)를 내려받아 `~/config/non-packaged/apps/RChromium/`에
+최신 릴리스(약 140 MB)를 내려받아 `~/config/non-packaged/apps/RChromium/`에
 설치하고, **Deskbar -> Applications**와 데스크톱에 **R Chromium**을 추가하며,
-`rchromium` 명령을 만듭니다. `/boot`에 약 350 MB의 여유 공간이 필요합니다.
+`rchromium` 명령을 만듭니다. `/boot`에 약 400 MB의 여유 공간이 필요합니다.
 
 이 저장소를 체크아웃했다면 `./install.sh`도 같은 일을 합니다.
 
