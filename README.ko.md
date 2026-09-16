@@ -10,7 +10,48 @@ arm64)에서 동작하며, 순정 Haiku arm64 이미지에서는 로드되지 �
 
 ![Haiku arm64 데스크톱에서 news.naver.com을 렌더링하는 R Chromium](docs/images/screenshot-naver.png)
 
-## 설치
+## pkgman으로 설치
+
+R Chromium은 `pkgman.rainygirl.com` 패키지 저장소에 올라가 있습니다. 기기에서
+Terminal을 열고 입력합니다:
+
+```sh
+pkgman add-repo https://pkgman.rainygirl.com/arm64
+pkgman add-repo https://pkgman.rainygirl.com/arm64-system
+pkgman install rchromium
+```
+
+그다음 **재부팅**합니다. R Chromium은 RenkuOS nightly arm64 이미지에 아직 없는
+커널·런타임 로더 수정 두 가지(TLSDESC 로더 패치, `query-valid-pte` 커널 패치)가
+필요합니다. `arm64-system` 저장소가 두 수정을 넣은 `haiku` 시스템 패키지를
+제공하며, `pkgman install rchromium`이 의존성으로 함께 설치합니다. 다음 부팅부터
+적용되고, 그전에는 R Chromium이 `Troubles relocating: Bad data`로 종료되거나
+커널이 패닉합니다.
+
+패키지는 약 150 MB이니 `/boot`에 그만큼 여유 공간이 있어야 합니다.
+`/boot/system/apps/RChromium/`에 설치되고, **Deskbar -> Applications**에
+**R Chromium**이 추가되며 `rchromium` 명령이 생깁니다. 제거는
+`pkgman uninstall rchromium`입니다.
+
+`pkgman add-repo`가 `Operation not supported`로 실패하면, 그 이미지는 네트워크
+킷에 TLS 지원 없이 빌드된 것입니다(RenkuOS nightly minimum 이미지가 그렇습니다).
+이 이미지는 1970-01-01로 부팅하므로 먼저 시계를 맞추고 HTTP 주소를 사용합니다:
+
+```sh
+date -u 091612002026        # MMDDhhmmYYYY, 현재 UTC 시각
+yes | pkgman add-repo http://pkgman.rainygirl.com/arm64
+yes | pkgman add-repo http://pkgman.rainygirl.com/arm64-system
+pkgman install rchromium
+```
+
+설치 후 재부팅합니다. 이 이미지는 부팅할 때마다 시계가 다시 1970으로 돌아가므로,
+R Chromium을 실행하기 전에 시계를 맞추세요. 안 맞추면 모든 HTTPS 사이트가
+`ERR_CERT_DATE_INVALID`로 실패합니다.
+
+`yes |`는 HTTPS 시도가 실패하며 남긴 저장소 설정 때문에 pkgman이 묻는
+"overwrite?"에 답하기 위한 것입니다.
+
+## 설치 스크립트로 설치
 
 기기에서 Terminal을 열고 아래 한 줄을 붙여 넣습니다:
 

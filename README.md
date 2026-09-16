@@ -10,7 +10,50 @@ loader patch); stock Haiku arm64 images cannot load it.
 
 ![R Chromium rendering news.naver.com on the Haiku arm64 desktop](docs/images/screenshot-naver.png)
 
-## Install
+## Install with pkgman
+
+R Chromium is published in the `pkgman.rainygirl.com` package repository.
+Open Terminal on the device:
+
+```sh
+pkgman add-repo https://pkgman.rainygirl.com/arm64
+pkgman add-repo https://pkgman.rainygirl.com/arm64-system
+pkgman install rchromium
+```
+
+Then **reboot**. R Chromium needs two fixes in the kernel and the runtime
+loader that the RenkuOS nightly arm64 image does not carry yet (the TLSDESC
+loader patch and the `query-valid-pte` kernel patch). The `arm64-system`
+repository publishes a `haiku` system package with both; `pkgman install
+rchromium` pulls it in as a dependency, and it takes effect on the next boot.
+Until then R Chromium exits with `Troubles relocating: Bad data` or panics the
+kernel.
+
+The package is about 150 MB; keep that much free on `/boot`. It installs into
+`/boot/system/apps/RChromium/`, adds **R Chromium** to
+**Deskbar -> Applications**, and adds an `rchromium` command. Remove it with
+`pkgman uninstall rchromium`.
+
+If `pkgman add-repo` fails with `Operation not supported`, the image was built
+without TLS support in its network kit (the RenkuOS nightly minimum image is).
+Set the clock first -- that image boots at 1970-01-01 -- and use the HTTP
+address instead:
+
+```sh
+date -u 091612002026        # MMDDhhmmYYYY, the current UTC time
+yes | pkgman add-repo http://pkgman.rainygirl.com/arm64
+yes | pkgman add-repo http://pkgman.rainygirl.com/arm64-system
+pkgman install rchromium
+```
+
+and reboot afterwards. The clock is lost again on every boot of that image;
+set it before starting R Chromium or every HTTPS site fails with
+`ERR_CERT_DATE_INVALID`.
+
+`yes |` answers the "overwrite?" question pkgman asks when a failed HTTPS
+attempt left a repository entry behind.
+
+## Install with the installer script
 
 Open Terminal on the device and paste this one line:
 
