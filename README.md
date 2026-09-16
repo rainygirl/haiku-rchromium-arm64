@@ -55,18 +55,28 @@ attempt left a repository entry behind.
 
 ## Install with the installer script
 
-Open Terminal on the device and paste this one line:
+`install.sh` does the same as the commands above -- sets the clock if it is
+wrong, registers both repositories (falling back to HTTP when the image has no
+TLS), installs `rchromium` and tells you to reboot when the system package was
+replaced. It needs nothing but `sh`, `openssl` and `pkgman`, so it also works
+on the minimum image. From a checkout:
 
 ```sh
-python3 -c "import urllib.request as u;exec(u.urlopen('https://raw.githubusercontent.com/rainygirl/haiku-rchromium-arm64/main/install.py').read())"
+sh install.sh
 ```
 
-It downloads the latest release (about 140 MB), installs it into
-`~/config/non-packaged/apps/RChromium/`, adds **R Chromium** to
-**Deskbar -> Applications** and the Desktop, and adds an `rchromium` command.
-You need about 400 MB free on `/boot`.
+Without a checkout, fetch it with openssl (the minimum image has no curl, wget
+or python3):
 
-From a checkout of this repository, `./install.sh` does the same.
+```sh
+printf 'GET /rainygirl/haiku-rchromium-arm64/main/install.sh HTTP/1.0\r\nHost: raw.githubusercontent.com\r\n\r\n' | openssl s_client -quiet -connect raw.githubusercontent.com:443 -servername raw.githubusercontent.com 2>/dev/null > /tmp/i.raw
+{ while IFS= read -r l; do [ "$l" = $'\r' ] && break; done; cat; } < /tmp/i.raw > /tmp/install.sh
+sh /tmp/install.sh
+```
+
+The old tarball path still exists as `sh install.sh --tarball` (delegates to
+`install.py`, which needs python3); it unpacks the release into
+`~/config/non-packaged/apps/RChromium/` without the kernel and loader fixes.
 
 ## Run
 
@@ -88,10 +98,11 @@ rchromium https://news.naver.com
 ## Uninstall
 
 ```sh
-python3 -c "import urllib.request as u;exec(u.urlopen('https://raw.githubusercontent.com/rainygirl/haiku-rchromium-arm64/main/install.py').read())" --uninstall
+pkgman uninstall rchromium
 ```
 
-or `./install.sh --uninstall` from a checkout.
+or `sh install.sh --uninstall`. The patched `haiku` system package stays; it
+is a superset of the stock one.
 
 ## AI disclosure
 

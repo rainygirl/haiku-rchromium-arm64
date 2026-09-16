@@ -54,17 +54,28 @@ R Chromium を起動する前に時計を合わせてください。合わせな
 
 ## インストールスクリプトでインストール
 
-デバイスで Terminal を開き、次の 1 行を貼り付けます:
+`install.sh` は上のコマンドと同じことをします -- 時計が狂っていれば合わせ、
+2 つのリポジトリを登録し (イメージに TLS がなければ HTTP に切り替え)、
+`rchromium` をインストールし、システムパッケージが置き換わったら再起動を促します。
+`sh`、`openssl`、`pkgman` だけで動くので minimum イメージでも使えます。
+チェックアウトから:
 
 ```sh
-python3 -c "import urllib.request as u;exec(u.urlopen('https://raw.githubusercontent.com/rainygirl/haiku-rchromium-arm64/main/install.py').read())"
+sh install.sh
 ```
 
-最新リリース (約 140 MB) をダウンロードして `~/config/non-packaged/apps/RChromium/`
-にインストールし、**Deskbar -> Applications** とデスクトップに **R Chromium** を
-追加し、`rchromium` コマンドを作成します。`/boot` に約 400 MB の空きが必要です。
+チェックアウトなしで使うには openssl で取得します (minimum イメージには curl、
+wget、python3 がありません):
 
-このリポジトリをチェックアウトしている場合は `./install.sh` でも同じことができます。
+```sh
+printf 'GET /rainygirl/haiku-rchromium-arm64/main/install.sh HTTP/1.0\r\nHost: raw.githubusercontent.com\r\n\r\n' | openssl s_client -quiet -connect raw.githubusercontent.com:443 -servername raw.githubusercontent.com 2>/dev/null > /tmp/i.raw
+{ while IFS= read -r l; do [ "$l" = $'\r' ] && break; done; cat; } < /tmp/i.raw > /tmp/install.sh
+sh /tmp/install.sh
+```
+
+以前の tarball 方式は `sh install.sh --tarball` として残っています (python3 が
+必要な `install.py` に委譲)。リリースを `~/config/non-packaged/apps/RChromium/`
+に展開しますが、カーネルとローダーの修正は入りません。
 
 ## 実行
 
@@ -86,10 +97,11 @@ rchromium https://news.naver.com
 ## アンインストール
 
 ```sh
-python3 -c "import urllib.request as u;exec(u.urlopen('https://raw.githubusercontent.com/rainygirl/haiku-rchromium-arm64/main/install.py').read())" --uninstall
+pkgman uninstall rchromium
 ```
 
-チェックアウトからは `./install.sh --uninstall`。
+または `sh install.sh --uninstall`。パッチ済みの `haiku` システムパッケージは
+そのまま残ります。元のパッケージの上位互換です。
 
 ## AI 利用について
 
