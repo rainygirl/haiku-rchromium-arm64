@@ -582,9 +582,25 @@ runs of the same binary on the same page, three per configuration, came out:
 	--no-concurrent-sweeping ok    CRASH  ok
 
 Every configuration both crashed and survived, `--single-threaded` included.
-At roughly two crashes in three runs, a single run separates nothing, and an
-observation of the form "X makes it go away" needs about ten runs per arm
-before it means anything. The list below was built one run at a time.
+Ten runs per arm then settled it:
+
+	baseline          XXXXXXXXXX   10 of 10 crashed
+	--single-threaded .X..XX.XXX    6 of 10 crashed
+
+	(X = crashed, . = still up after 70 s)
+
+So **`--single-threaded` does not make the crash go away.** It lowers the rate,
+which is what a timing change does, and on a 70-second limit some of those
+dots are probably runs that had not got far enough yet rather than runs that
+were safe. Baseline is deterministic, which makes it a good control; nothing
+else measured here is.
+
+That matters beyond the flag. "It goes away under `--single-threaded`" is what
+made this look like a race between V8's own threads, and the list below --
+every entry of it -- was built by running a diagnostic build once and seeing
+whether the crash appeared. At one run per hypothesis, a change that does
+nothing at all looks like a fix a third of the time. Treat the rest of this
+section as leads, not as eliminated.
 
 What does make it go away: `--js-flags=--single-threaded`, and, unhelpfully,
 almost any change that shifts timing or layout -- guard pages under the hash
