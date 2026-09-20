@@ -572,6 +572,20 @@ invalidated when the address is handed out again); use of a destroyed
 `AstValueFactory`; and V8's lazy compile dispatcher
 (`--js-flags=--no-lazy-compile-dispatcher` still crashes).
 
+**Read the next paragraph with the 2026-09-20 measurement in mind: every
+"makes it go away" here may be an artefact.** The crash is intermittent. Twelve
+runs of the same binary on the same page, three per configuration, came out:
+
+	baseline                CRASH  ok     CRASH
+	--single-threaded       ok     CRASH  ok
+	--single-threaded-gc    CRASH  CRASH  ok
+	--no-concurrent-sweeping ok    CRASH  ok
+
+Every configuration both crashed and survived, `--single-threaded` included.
+At roughly two crashes in three runs, a single run separates nothing, and an
+observation of the form "X makes it go away" needs about ten runs per arm
+before it means anything. The list below was built one run at a time.
+
 What does make it go away: `--js-flags=--single-threaded`, and, unhelpfully,
 almost any change that shifts timing or layout -- guard pages under the hash
 map's allocator, leaking zone segments instead of freeing them, adding a
