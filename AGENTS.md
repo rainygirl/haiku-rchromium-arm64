@@ -417,6 +417,36 @@ dynamic symbols and LOAD layout exactly. To test without repackaging, run
 The stock VM has no curl, python, awk or bash `/dev/tcp`; WebPositive can
 download from a host `http.server` at `http://10.0.2.2:<port>/`.
 
+## Driving the VM, and the tools that are missing inside it
+
+Most of the time spent on the bugs below went into watching the guest, not
+into the bugs. What works:
+
+- The stock guest has **no `grep`, `sed` or `awk`**. Bash pattern matching is
+  the substitute:
+  `while read l; do case "$l" in *PATTERN*) echo "$l";; esac; done < file`
+- Piping a long-running program through `tail` shows nothing until it exits.
+  Use `head -N`, or redirect to a file and filter afterwards.
+- The Terminal's scrollback cannot be reached with PgUp through QMP; the keys
+  go to the shell as history.
+- QMP typing drops characters when it outruns input_server. `shot.py` takes
+  `KEYDELAY` (0.12 is reliable); long command lines still need checking
+  against a screenshot before Enter.
+- Copying the 323 MB content_shell inside the guest takes well over a minute.
+  Scripted sequences that assume 40 s type their next command into the middle
+  of the copy.
+- `/dev/ports` is empty, so the serial port is not a way out; the FAT32
+  transfer image is, but only after QEMU exits, and the guest's FAT writes do
+  not always survive.
+
+## Symbolising a Haiku crash
+
+Haiku executables are ET_DYN, so a runtime address means nothing alone. The
+handler prints an image map; subtract the image's base and use
+`aarch64-unknown-haiku-addr2line -Cfpie content_shell <offset>`. For a signal,
+the unwinder cannot cross the signal frame -- use the printed `elr` instead of
+the backtrace.
+
 ## Backtraces on Haiku (added 2026-09-19)
 
 Every crash used to print `[end of stack trace]` with nothing above it, which
@@ -533,6 +563,20 @@ sequencing Chromium assumes. The message pump is the first suspect, because
 wake-up would let work run out of order. A build with `dcheck_always_on=true`
 is the other obvious move: V8's zone and parser carry thread-affinity DCHECKs
 that would name the violation outright.
+
+**Where this was left (2026-09-20).** A `dcheck_always_on=true` build was
+started and not finished -- 65181 steps, several hours. That is the next move:
+V8's zone and parser carry thread-affinity DCHECKs that would name the
+violation at the moment it happens, instead of leaving the corrupted result to
+be reverse-engineered afterwards, which is what every diagnostic so far has
+had to do. `out/haiku-arm64/args.gn` currently has DCHECKs on; the previous
+args are saved in the container at `/root/args.nodcheck.bak`. Expect build
+errors from Haiku-guarded debug code that has never been compiled with
+DCHECKs enabled.
+
+Note also that the x86 port fails differently on the same page -- V8's
+embedded builtin code reads as zeros there -- so do not assume one fix covers
+both.
 
 Comparing against an upstream Linux arm64 build of the same revision would
 settle whether this is the port at all, but that build is blocked: Chromium's
