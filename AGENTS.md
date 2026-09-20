@@ -575,7 +575,8 @@ invalidated when the address is handed out again); use of a destroyed
 What does make it go away: `--js-flags=--single-threaded`, and, unhelpfully,
 almost any change that shifts timing or layout -- guard pages under the hash
 map's allocator, leaking zone segments instead of freeing them, adding a
-member to `AstValueFactory`, adding an atomic to `GetString`. That pattern is
+member to `AstValueFactory`, adding an atomic to `GetString`, and, as of
+2026-09-20, building the whole tree with `dcheck_always_on=true`. That pattern is
 the strongest evidence there is that this is a race, and it is also why every
 diagnostic has to be weighed against the possibility that it hid the bug
 rather than explained it.
@@ -635,15 +636,29 @@ safe from anywhere, so the handle was the only unsafe part: it is now
 `HaikuPresentTarget`, ref-counted, one pointer under a lock, cleared by the UI
 thread in `Detach()`.
 
-**With those three fixed, x.com no longer crashes.** The DCHECK build reaches
-the page, renders its splash, and goes on grinding without a single V8
-complaint -- no `AstRawString::Equal`, no `Vector::length` CHECK, nothing. That
-is not yet proof: a DCHECK build changes timing everywhere, and this bug has
-disappeared under lighter changes than that. The decisive run is the same two
-fixes in a release build, which is what to look at next. `/root/args.dcheck.bak`
-and `/root/args.nodcheck.bak` in the container hold the two arg sets, and the
-DCHECK binary is kept at `/root/dcheck-build/` so it does not have to be built
-again.
+With those three fixed, the DCHECK build reaches the page, renders its splash
+and goes on grinding without a single V8 complaint. **That was timing, not a
+fix.** Rebuilt from the same sources with `/root/args.nodcheck.bak` restored,
+x.com dies exactly as it always has:
+
+	# Fatal error
+	# Check failed: std::numeric_limits<int>::max() >= length_.
+
+So the entry for the ruled-out list is: **the two Ozone cross-thread defects
+are not the cause** (14), and, more usefully, **`dcheck_always_on` does not
+reproduce the bug at all, so it cannot diagnose it** (15). That closes the
+route this file recommended. Nothing was learned about V8's own thread and
+zone DCHECKs, because the bug never occurred for them to fire on.
+
+The two fixes are worth keeping on their own merits -- they are real
+unsynchronised cross-thread access -- but they belong in the port's hygiene,
+not in this investigation.
+
+`/root/args.dcheck.bak` and `/root/args.nodcheck.bak` in the container hold
+the two arg sets, and the DCHECK binary is kept at `/root/dcheck-build/` so it
+does not have to be built again. A full rebuild between the two is about
+65,000 edges and roughly 2.5 hours at `-j 14`; the container has 14 CPUs, so
+do not leave ninja at the `-j 11` it was last found running with.
 
 Note also that the x86 port fails differently on the same page -- V8's
 embedded builtin code reads as zeros there -- so do not assume one fix covers
