@@ -576,7 +576,13 @@ DCHECKs enabled.
 
 Note also that the x86 port fails differently on the same page -- V8's
 embedded builtin code reads as zeros there -- so do not assume one fix covers
-both.
+both. **(Settled 2026-09-20: the x86 zeros were not V8 at all. Its binary had
+142 page-aligned zero pages written into `.text` and `.rodata` by a link run
+outside `linkretry-verified.sh`, 59 of them over `Builtins_JSEntry`. A gated
+relink plus a missing `/boot/home/rchromium-fonts.conf` got x.com rendering
+there. Nothing carries over to this port -- the arm64 binary is built in a
+container with memory to spare -- except the habit of checking that the bytes
+you are reasoning about are actually in the file.)**
 
 Comparing against an upstream Linux arm64 build of the same revision would
 settle whether this is the port at all, but that build is blocked: Chromium's

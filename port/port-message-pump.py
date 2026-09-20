@@ -136,6 +136,34 @@ EDITS = [
      "    DPCHECK(rv == 0);\n"
      "#endif\n"),
 
+    # Upstream's epoll_ctl debug history (TODO(361611793)) only compiles with
+    # DCHECKs on, which this port had never done until the dcheck_always_on
+    # build of 2026-09-20. It records the epoll_event that was handed to
+    # epoll_ctl, and on Haiku there is no such call and no such variable, so
+    # the three sites have to go with it. Nothing is lost: the history exists
+    # to explain an epoll_ctl failure.
+    (C,
+     "#if DCHECK_IS_ON()\n"
+     "  // TODO(361611793): Remove these debug logs after resolving the issue.\n",
+     "#if DCHECK_IS_ON() && !defined(__HAIKU__)\n"
+     "  // TODO(361611793): Remove these debug logs after resolving the issue.\n"),
+
+    (C,
+     "#if DCHECK_IS_ON()\n"
+     "    entry.PushEpollHistory(std::make_optional(event));\n"
+     "#endif\n",
+     "#if DCHECK_IS_ON() && !defined(__HAIKU__)\n"
+     "    entry.PushEpollHistory(std::make_optional(event));\n"
+     "#endif\n"),
+
+    (C,
+     "#if DCHECK_IS_ON()\n"
+     "    entry.PushEpollHistory(std::nullopt);\n"
+     "#endif\n",
+     "#if DCHECK_IS_ON() && !defined(__HAIKU__)\n"
+     "    entry.PushEpollHistory(std::nullopt);\n"
+     "#endif\n"),
+
     # The wait itself: take the poll branch unconditionally.
     (C,
      "  bool use_poll =\n"
