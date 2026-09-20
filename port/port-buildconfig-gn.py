@@ -44,7 +44,15 @@ new_cfg = """if (is_apple) {
 }
 
 if (is_haiku) {
-  default_compiler_configs += [ "//build/config/haiku:sdk" ]
+  default_compiler_configs += [
+    "//build/config/haiku:sdk",
+
+    # The libraries that live outside libroot. A config's libs propagate to
+    # everything that links the target, which is what puts -lnetwork and
+    # friends on the final link line; //build/config:default_libs has no
+    # Haiku branch.
+    "//build/config/haiku:runtime_library",
+  ]
 }"""
 if "config/haiku:sdk" not in s:
     assert s.count(old_cfg) == 1, "default_compiler_configs does not look as expected"

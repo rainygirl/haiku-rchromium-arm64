@@ -12,12 +12,17 @@
 #include <View.h>
 
 #include <memory>
+#include <string_view>
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "base/strings/utf_string_conversion_utils.h"
 #include "base/task/single_thread_task_runner.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/event.h"
+#include "ui/events/keycodes/dom/dom_code.h"
+#include "ui/events/keycodes/dom/dom_key.h"
+#include "ui/events/keycodes/keyboard_code_conversion.h"
 #include "ui/events/keycodes/keyboard_codes_posix.h"
 #include "ui/ozone/platform/haiku/haiku_window.h"
 
@@ -110,6 +115,27 @@ KeyboardCode KeyboardCodeFromByte(char c) {
   return VKEY_UNKNOWN;
 }
 
+// The first code point of what the key produced, or 0 for the B_* named keys.
+// Haiku hands KeyDown the characters the keymap generated, already shifted, as
+// UTF-8; the named keys arrive as single control bytes, which belong to
+// KeyboardCodeFromByte instead.
+char32_t CharacterFromBytes(const char* bytes, int num_bytes) {
+  if (bytes == nullptr || num_bytes < 1) {
+    return 0;
+  }
+  size_t index = 0;
+  base_icu::UChar32 code_point = 0;
+  if (!base::ReadUnicodeCharacter(
+          std::string_view(bytes, static_cast<size_t>(num_bytes)), &index,
+          &code_point)) {
+    return 0;
+  }
+  if (code_point < 0x20 || code_point == 0x7f) {
+    return 0;
+  }
+  return static_cast<char32_t>(code_point);
+}
+
 }  // namespace
 
 HaikuEventBridge::HaikuEventBridge(
@@ -189,9 +215,33 @@ void HaikuEventBridge::OnKey(bool pressed,
     return;
   }
   const int flags = EventFlagsFromModifiers(modifiers);
-  const KeyboardCode code = KeyboardCodeFromByte(bytes[0]);
+  KeyboardCode code = KeyboardCodeFromByte(bytes[0]);
+  DomCode dom_code = DomCode::NONE;
+  DomKey dom_key = DomKey::NONE;
+
+  // Name the character on the event. Left unset, the DomKey is derived from
+  // the key code through the stub US layout, which can only answer for
+  // letters, digits and the shifted digits -- every punctuation key then
+  // arrived as VKEY_UNKNOWN with no character and nothing was inserted, so an
+  // email address or a password could not be typed. Chromium wants the
+  // US-layout code and key code that would have produced the character, and
+  // Haiku has already applied the keymap, so map back through that layout.
+  // Skipped while a shortcut modifier is held: Alt+C must not also type a "c".
+  const char32_t character =
+      (flags & (EF_CONTROL_DOWN | EF_ALT_DOWN | EF_COMMAND_DOWN)) != 0
+          ? 0
+          : CharacterFromBytes(bytes, num_bytes);
+  if (character != 0) {
+    dom_key = DomKey::FromCharacter(character);
+    dom_code = UsLayoutDomKeyToDomCode(dom_key);
+    if (code == VKEY_UNKNOWN) {
+      code = DomCodeToUsLayoutNonLocatedKeyboardCode(dom_code);
+    }
+  }
+
   auto event = std::make_unique<KeyEvent>(
-      pressed ? EventType::kKeyPressed : EventType::kKeyReleased, code, flags);
+      pressed ? EventType::kKeyPressed : EventType::kKeyReleased, code,
+      dom_code, flags, dom_key, EventTimeForNow());
   ui_task_runner_->PostTask(
       FROM_HERE, base::BindOnce(&HaikuWindow::OnEventFromWindowThread, window_,
                                 std::move(event)));

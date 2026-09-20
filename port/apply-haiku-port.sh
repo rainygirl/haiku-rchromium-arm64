@@ -38,6 +38,13 @@ python3 "$HERE/port-feature-flags.py" "$SRC"
 python3 "$HERE/port-base-posix.py" "$SRC"
 python3 "$HERE/port-message-pump.py" "$SRC"
 python3 "$HERE/port-perfetto-os-lists.py" "$SRC"
+# These were written but never wired in here, so a clean checkout came out
+# missing every edit they carry -- //content, //net, //v8 and the libc crate's
+# Haiku arm64 source list.
+python3 "$HERE/port-content.py" "$SRC"
+python3 "$HERE/port-net.py" "$SRC"
+python3 "$HERE/port-v8.py" "$SRC"
+python3 "$HERE/port-rust-libc.py" "$SRC"
 python3 "$HERE/port-crubit.py" "$SRC"
 python3 "$HERE/port-content-shell-ui.py" "$SRC"
 python3 "$HERE/port-content-shell-build.py" "$SRC"

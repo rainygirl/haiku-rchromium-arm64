@@ -1033,6 +1033,809 @@ EDITS = [
      '      }\n'
      '      NOTREACHED() << "Unable to find the B_APP_IMAGE for this team.";\n'
      '#endif\n'),
+
+    # Keep //chrome out of a content_shell build. gn loads the BUILD.gn of
+    # every label a loaded file names, whether or not the target is reachable
+    # from the root, and telemetry's build file names //chrome targets. That
+    # one dep is what drags all of //chrome in: 121 of its BUILD.gn files
+    # assert a platform list, and its own dep graph then has to resolve for a
+    # browser this port does not build. The group is a wrapper around
+    # telemetry's test scripts and has no part in content_shell.
+    # font_list_fontconfig.cc is in the sources for Haiku -- only Windows,
+    # macOS, Android, Fuchsia and iOS drop it -- but Haiku has no fontconfig,
+    # and building Chromium's bundled copy for it needs a gettext that the
+    # sysroot does not have. The Haiku file (port/files/content/common/) takes
+    # its place, the way Fuchsia's does.
+    ("content/common/BUILD.gn",
+     '  if (is_mac || is_win || is_android || is_fuchsia || is_ios) {\n'
+     '    sources -= [ "font_list_fontconfig.cc" ]\n'
+     '  }\n',
+     '  if (is_mac || is_win || is_android || is_fuchsia || is_ios ||\n'
+     '      is_haiku) {\n'
+     '    sources -= [ "font_list_fontconfig.cc" ]\n'
+     '  }\n'
+     '\n'
+     '  if (is_haiku) {\n'
+     '    sources += [ "font_list_haiku.cc" ]\n'
+     '  }\n'),
+
+    # Blink's heap picks the same "local-exec" TLS model V8 did, and Haiku
+    # takes the same answer: "local-dynamic". initial-exec would set
+    # DF_STATIC_TLS, which Haiku's runtime_loader refuses. With
+    # local-dynamic the access is a __tls_get_addr call, so the out-of-line
+    # getter is the right one -- which is what the second edit selects.
+    ("third_party/blink/renderer/platform/heap/thread_local.h",
+     '#elif BUILDFLAG(IS_ANDROID)\n'
+     '#define BLINK_HEAP_THREAD_LOCAL_MODEL "local-dynamic"\n',
+     '#elif BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_HAIKU)\n'
+     '#define BLINK_HEAP_THREAD_LOCAL_MODEL "local-dynamic"\n'),
+    ("third_party/blink/renderer/platform/heap/thread_local.h",
+     '#if !BLINK_HEAP_HIDE_THREAD_LOCAL_IN_LIBRARY && !BUILDFLAG(IS_ANDROID) && \\\n'
+     '    !BUILDFLAG(IS_APPLE)\n',
+     '#if !BLINK_HEAP_HIDE_THREAD_LOCAL_IN_LIBRARY && !BUILDFLAG(IS_ANDROID) && \\\n'
+     '    !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_HAIKU)\n'),
+
+    # The per-OS pieces that Haiku brings its own file for. Each is named
+    # in port/files/ and copied in by apply-haiku-port.sh.
+    ("content/browser/BUILD.gn",
+     '  if (is_linux || is_chromeos) {\n'
+     '    sources -=\n'
+     '        [ "file_system_access/file_path_watcher/file_path_watcher_stub.cc" ]\n',
+     '  if (is_haiku) {\n'
+     '    sources += [ "child_process_launcher_helper_haiku.cc" ]\n'
+     '  }\n'
+     '\n'
+     '  if (is_linux || is_chromeos) {\n'
+     '    sources -=\n'
+     '        [ "file_system_access/file_path_watcher/file_path_watcher_stub.cc" ]\n'),
+    ("ui/gfx/BUILD.gn",
+     '  if (is_apple) {\n'
+     '    sources += [ "font_render_params_mac.cc" ]\n',
+     '  if (is_haiku) {\n'
+     '    sources += [\n'
+     '      "animation/animation_haiku.cc",\n'
+     '      "font_render_params_haiku.cc",\n'
+     '    ]\n'
+     '  }\n'
+     '\n'
+     '  if (is_apple) {\n'
+     '    sources += [ "font_render_params_mac.cc" ]\n'),
+    ("media/audio/BUILD.gn",
+     '  if (is_linux || is_chromeos) {\n'
+     '    sources += [ "linux/audio_manager_linux.cc" ]\n'
+     '  }\n',
+     '  if (is_linux || is_chromeos) {\n'
+     '    sources += [ "linux/audio_manager_linux.cc" ]\n'
+     '  }\n'
+     '\n'
+     '  if (is_haiku) {\n'
+     '    sources += [ "haiku/audio_manager_haiku.cc" ]\n'
+     '  }\n'),
+
+    # libc++abi defines __cxa_thread_atexit only for Linux and Fuchsia, and
+    # Haiku's libroot does not have it either (nor the _impl form), so every
+    # thread_local with a destructor -- V8's histograms, LLVM's ThreadLocal --
+    # is left undefined at link time. The fallback implementation in this very
+    # file is what Haiku needs; it is only the guard that excludes it.
+    ("third_party/libc++abi/src/src/cxa_thread_atexit.cpp",
+     "#if defined(__linux__) || defined(__Fuchsia__)\n",
+     "#if defined(__linux__) || defined(__Fuchsia__) || defined(__HAIKU__)\n"),
+
+    # ANGLE's POSIX system utilities. system_utils_linux.cpp is the /proc and
+    # dl_iterate_phdr half, which Haiku has no use for; system_utils_posix.cpp
+    # holds GetEnvironmentVar, GetTempDirectory and the rest.
+    ("third_party/angle/src/libGLESv2.gni",
+     'if (is_linux || is_chromeos || is_android || is_fuchsia) {\n'
+     '  libangle_common_sources += [\n'
+     '    "src/common/system_utils_linux.cpp",\n'
+     '    "src/common/system_utils_posix.cpp",\n'
+     '  ]\n'
+     '}\n',
+     'if (is_linux || is_chromeos || is_android || is_fuchsia) {\n'
+     '  libangle_common_sources += [\n'
+     '    "src/common/system_utils_linux.cpp",\n'
+     '    "src/common/system_utils_posix.cpp",\n'
+     '  ]\n'
+     '}\n'
+     '\n'
+     'if (is_haiku) {\n'
+     '  libangle_common_sources += [\n'
+     '    "src/common/system_utils_haiku.cpp",\n'
+     '    "src/common/system_utils_posix.cpp",\n'
+     '  ]\n'
+     '}\n'),
+
+    # ANGLE's WebGPU backend stubs out CreateWgpuWindowSurface when there is
+    # no window system to create one for, but tests that with a Linux-only
+    # condition. Haiku has no wgpu window surface either, so it takes the stub
+    # rather than leaving the symbol undefined.
+    ("third_party/angle/src/libANGLE/renderer/wgpu/DisplayWgpu.cpp",
+     "#if defined(ANGLE_PLATFORM_LINUX) && !defined(ANGLE_USE_X11) && !defined(ANGLE_USE_WAYLAND)\n",
+     "#if (defined(ANGLE_PLATFORM_LINUX) && !defined(ANGLE_USE_X11) && \\\n"
+     "     !defined(ANGLE_USE_WAYLAND)) ||                              \\\n"
+     "    defined(__HAIKU__)\n"),
+
+    # cpuinfo: see port/files/third_party/cpuinfo/haiku_isa.c.
+    ("third_party/cpuinfo/BUILD.gn",
+     '  if ((is_linux || is_chromeos) && current_cpu == "arm64") {\n',
+     '  if (is_haiku && (current_cpu == "arm64" || current_cpu == "arm")) {\n'
+     '    sources = [ "haiku_isa.c" ]\n'
+     '  }\n'
+     '\n'
+     '  if ((is_linux || is_chromeos) && current_cpu == "arm64") {\n'),
+
+    # The GPU channel host the video capture code names unconditionally. Its
+    # own flag's platform list has no Haiku (there is no GPU process here),
+    # but media/capture references media::VideoCaptureGpuChannelHost from
+    # mappable_shared_image_utils.cc regardless, so the file is built.
+    ("media/capture/BUILD.gn",
+     '  # Establish GPU Channel\n'
+     '  if (enable_gpu_channel_media_capture) {\n',
+     '  # Establish GPU Channel\n'
+     '  if (enable_gpu_channel_media_capture || is_haiku) {\n'),
+
+    # Text-to-speech, the system animation preferences, the memory-dump
+    # service's per-process figures: each is a per-OS file, and each of
+    # Haiku's is in port/files/.
+    ("content/browser/BUILD.gn",
+     '  if (is_linux) {\n'
+     '    sources += [ "speech/tts_linux.cc" ]\n',
+     '  if (is_haiku) {\n'
+     '    sources += [\n'
+     '      "scheduler/responsiveness/native_event_observer_haiku.cc",\n'
+     '      "speech/tts_haiku.cc",\n'
+     '    ]\n'
+     '  }\n'
+     '\n'
+     '  if (is_linux) {\n'
+     '    sources += [ "speech/tts_linux.cc" ]\n'),
+    ("services/resource_coordinator/public/cpp/memory_instrumentation/BUILD.gn",
+     '    sources += [ "os_metrics_fuchsia.cc" ]\n',
+     '    sources += [ "os_metrics_fuchsia.cc" ]\n'
+     '  }\n'
+     '\n'
+     '  if (is_haiku) {\n'
+     '    sources += [ "os_metrics_haiku.cc" ]\n'),
+
+    # Extension service workers' USB bridge: the file is platform-neutral, it
+    # is only the list of platforms that names desktops one by one.
+    ("content/browser/BUILD.gn",
+     '  if (is_win || is_apple || is_linux || is_chromeos || is_desktop_android ||\n'
+     '      is_fuchsia) {\n'
+     '    sources += [\n'
+     '      "service_worker/service_worker_usb_delegate_observer.cc",\n',
+     '  if (is_win || is_apple || is_linux || is_chromeos || is_desktop_android ||\n'
+     '      is_fuchsia || is_haiku) {\n'
+     '    sources += [\n'
+     '      "service_worker/service_worker_usb_delegate_observer.cc",\n'),
+
+    # The system trust store. The chain of platform branches ends at
+    # Android with no #else, so a platform outside it has no
+    # CreateSslSystemTrustStoreChromeRoot at all. Haiku has no system
+    # certificate store to consult -- which is why the port already sets
+    # chrome_root_store_only -- so the Chrome root store alone is the whole
+    # answer, and there is a constructor for exactly that.
+    ("net/cert/internal/system_trust_store.cc",
+     "#elif BUILDFLAG(IS_ANDROID)\n"
+     "\n"
+     "#if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)\n",
+     "#elif BUILDFLAG(IS_HAIKU)\n"
+     "\n"
+     "std::unique_ptr<SystemTrustStore> CreateSslSystemTrustStoreChromeRoot(\n"
+     "    std::unique_ptr<TrustStoreChrome> chrome_root) {\n"
+     "  return CreateChromeOnlySystemTrustStore(std::move(chrome_root));\n"
+     "}\n"
+     "\n"
+     "#elif BUILDFLAG(IS_ANDROID)\n"
+     "\n"
+     "#if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)\n"),
+
+    # The last of the per-OS files: a time-zone monitor that never fires, a
+    # responsiveness observer with no native-event source to hook, and the
+    # aura resource bundle (GetNativeImageNamed), which is not Linux-specific
+    # despite its name -- it just turns a resource into a gfx::Image.
+    ("services/device/time_zone_monitor/BUILD.gn",
+     '  if (is_fuchsia) {\n'
+     '    sources += [ "time_zone_monitor_fuchsia.cc" ]\n'
+     '  }\n',
+     '  if (is_fuchsia) {\n'
+     '    sources += [ "time_zone_monitor_fuchsia.cc" ]\n'
+     '  }\n'
+     '\n'
+     '  if (is_haiku) {\n'
+     '    sources += [ "time_zone_monitor_haiku.cc" ]\n'
+     '  }\n'),
+    ("ui/base/BUILD.gn",
+     '  if (use_aura && (is_linux || is_chromeos)) {\n'
+     '    sources += [ "resource/resource_bundle_auralinux.cc" ]\n'
+     '  }\n',
+     '  if (use_aura && (is_linux || is_chromeos || is_haiku)) {\n'
+     '    sources += [ "resource/resource_bundle_auralinux.cc" ]\n'
+     '  }\n'),
+
+    # Skia's directory font manager. HaikuFontMgr (skia/ext/font_utils.cc)
+    # composes one per font location, and Chromium's skia target compiles the
+    # "custom" font manager sources but not the directory variant, which only
+    # this port asks for.
+    ("skia/BUILD.gn",
+     '      sources += skia_ports_fontmgr_custom_sources\n',
+     '      sources += skia_ports_fontmgr_custom_sources\n'
+     '      if (is_haiku) {\n'
+     '        sources += [ "//third_party/skia/src/ports/SkFontMgr_custom_directory.cpp" ]\n'
+     '      }\n'),
+
+    # GPU info, platform MIME types: one Haiku file each, in port/files/.
+    ("gpu/config/BUILD.gn",
+     '  if (is_fuchsia) {\n'
+     '    sources += [ "gpu_info_collector_fuchsia.cc" ]\n'
+     '  }\n',
+     '  if (is_fuchsia) {\n'
+     '    sources += [ "gpu_info_collector_fuchsia.cc" ]\n'
+     '  }\n'
+     '\n'
+     '  if (is_haiku) {\n'
+     '    sources += [ "gpu_info_collector_haiku.cc" ]\n'
+     '  }\n'),
+    ("net/BUILD.gn",
+     '      "base/platform_mime_util_linux.cc",\n'
+     '    ]\n'
+     '  }\n',
+     '      "base/platform_mime_util_linux.cc",\n'
+     '    ]\n'
+     '  }\n'
+     '\n'
+     '  if (is_haiku) {\n'
+     '    sources += [\n'
+     '      "base/platform_mime_util_haiku.cc",\n'
+     '      # No system certificate store to add a test root to.\n'
+     '      "cert/test_root_certs_builtin.cc",\n'
+     '    ]\n'
+     '  }\n'),
+
+    # BoringSSL's ARM feature detection. Every cpu_aarch64_*.cc is for an OS
+    # it knows, so a build for any other is left without
+    # OPENSSL_cpuid_setup(). OPENSSL_STATIC_ARMCAP is the switch for exactly
+    # that case: no runtime detection, baseline features only. Chromium
+    # already builds BoringSSL with OPENSSL_NO_ASM here, so the accelerated
+    # paths the detection would unlock are not compiled in anyway.
+
+    # Stack traces. backtrace() lives in glibc and in Apple's libc; Haiku
+    # keeps no equivalent in its base libraries (libexecinfo is a HaikuPorts
+    # package), so HAVE_BACKTRACE stays unset and every crash printed
+    # "[end of stack trace]" with nothing above it.
+    #
+    # The unwinder libc++abi already links is enough: _Unwind_Backtrace walks
+    # the .eh_frame this build emits, with no extra package and no frame
+    # pointers. See base/debug/unwind_backtrace_haiku.h, which also prints the
+    # image map -- a Haiku executable is ET_DYN, so a bare runtime address
+    # cannot be handed to addr2line without it.
+    ("base/debug/stack_trace_posix.cc",
+     "// Controls whether to include code to demangle C++ symbols.\n",
+     "#if defined(__HAIKU__)\n"
+     "#include \"base/debug/unwind_backtrace_haiku.h\"\n"
+     "#endif\n"
+     "\n"
+     "// Controls whether to include code to demangle C++ symbols.\n"),
+
+    ("base/debug/stack_trace_posix.cc",
+     "                base::saturated_cast<int>(trace.size())));\n"
+     "#else\n"
+     "  return 0;\n"
+     "#endif\n",
+     "                base::saturated_cast<int>(trace.size())));\n"
+     "#elif defined(__HAIKU__)\n"
+     "  return base::debug::haiku::CollectBacktrace(trace);\n"
+     "#else\n"
+     "  return 0;\n"
+     "#endif\n"),
+
+    # The faulting instruction. _Unwind_Backtrace cannot walk through a Haiku
+    # signal frame, so the trace below the handler is empty and a crash says
+    # nothing about where it happened. elr (the faulting PC) and lr from the
+    # context are the whole answer in that case -- this is what located a null
+    # dereference in the media capture factory that the backtrace could not.
+    ("base/debug/stack_trace_posix.cc",
+     "  debug::StackTrace().Print();\n",
+     "#if defined(__HAIKU__)\n"
+     "  {\n"
+     "    // mcontext_t is struct vregs (arch/arm64/signal.h); <signal.h>,\n"
+     "    // included above, declares it -- Haiku has no <ucontext.h>.\n"
+     "    const ucontext_t* uc = static_cast<const ucontext_t*>(void_context);\n"
+     "    char reg_buf[32];\n"
+     "    PrintToStderr(\"[haiku] elr=\");\n"
+     "    internal::itoa_r(static_cast<intptr_t>(uc->uc_mcontext.elr), 16, 16,\n"
+     "                     reg_buf);\n"
+     "    PrintToStderr(reg_buf);\n"
+     "    PrintToStderr(\" lr=\");\n"
+     "    internal::itoa_r(static_cast<intptr_t>(uc->uc_mcontext.lr), 16, 16,\n"
+     "                     reg_buf);\n"
+     "    PrintToStderr(reg_buf);\n"
+     "    PrintToStderr(\"\\n\");\n"
+     "  }\n"
+     "#endif\n"
+     "  debug::StackTrace().Print();\n"),
+
+    # The signal handler's path. It has to stay async-signal safe, which is
+    # why the helper writes with write() rather than through a std::ostream.
+    ("base/debug/stack_trace_posix.cc",
+     "#if defined(HAVE_BACKTRACE)\n"
+     "  PrintBacktraceOutputHandler handler;\n"
+     "  ProcessBacktrace(addresses(), prefix_string, &handler);\n"
+     "#endif\n",
+     "#if defined(HAVE_BACKTRACE)\n"
+     "  PrintBacktraceOutputHandler handler;\n"
+     "  ProcessBacktrace(addresses(), prefix_string, &handler);\n"
+     "#elif defined(__HAIKU__)\n"
+     "  base::debug::haiku::PrintBacktrace(addresses(), prefix_string);\n"
+     "#endif\n"),
+
+    ("base/debug/stack_trace_posix.cc",
+     "#if defined(HAVE_BACKTRACE)\n"
+     "void StackTrace::OutputToStreamWithPrefixImpl(\n",
+     "#if !defined(HAVE_BACKTRACE) && defined(__HAIKU__)\n"
+     "void StackTrace::OutputToStreamWithPrefixImpl(\n"
+     "    std::ostream* os,\n"
+     "    cstring_view prefix_string) const {\n"
+     "  base::debug::haiku::PrintImageMapToStream(os, prefix_string);\n"
+     "  for (const void* address : addresses()) {\n"
+     "    *os << prefix_string << address << \"\\n\";\n"
+     "  }\n"
+     "}\n"
+     "#endif\n"
+     "\n"
+     "#if defined(HAVE_BACKTRACE)\n"
+     "void StackTrace::OutputToStreamWithPrefixImpl(\n"),
+
+    # Video capture. Haiku has no backend, so the factory came out null --
+    # and VideoCaptureSystemImpl::GetDeviceInfosAsync dereferences it without
+    # checking, so a page that enumerates cameras (x.com does, on load)
+    # crashed the renderer with a null dereference four seconds in. Report an
+    # empty device list instead: the fake factory with an empty config is
+    # what says "this machine has no cameras" without inventing one.
+    ("media/capture/video/create_video_capture_device_factory.cc",
+     "#elif BUILDFLAG(IS_IOS)\n"
+     "  return CreateFakeVideoCaptureDeviceFactory();\n"
+     "#else\n"
+     "  NOTIMPLEMENTED();\n"
+     "  return nullptr;\n"
+     "#endif\n",
+     "#elif BUILDFLAG(IS_IOS)\n"
+     "  return CreateFakeVideoCaptureDeviceFactory();\n"
+     "#elif BUILDFLAG(IS_HAIKU)\n"
+     "  {\n"
+     "    auto factory = std::make_unique<FakeVideoCaptureDeviceFactory>();\n"
+     "    factory->SetToCustomDevicesConfig({});\n"
+     "    return factory;\n"
+     "  }\n"
+     "#else\n"
+     "  NOTIMPLEMENTED();\n"
+     "  return nullptr;\n"
+     "#endif\n"),
+
+    # base/trace_event's system-allocator reporter. It is compiled only when
+    # PartitionAlloc is not the malloc -- which is how the allocator is
+    # swapped out for a build -- and it reads mallinfo(), which Haiku's
+    # libroot does not have. Leave the totals at zero; nothing but the
+    # memory-infra trace reads them.
+    ("base/trace_event/malloc_dump_provider.cc",
+     "    (!PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) && !BUILDFLAG(IS_WIN) &&    \\\n"
+     "     !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_FUCHSIA))\n",
+     "    (!PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) && !BUILDFLAG(IS_WIN) &&    \\\n"
+     "     !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_HAIKU))\n"),
+
+    ("base/trace_event/malloc_dump_provider.cc",
+     "#elif BUILDFLAG(IS_FUCHSIA)\n"
+     "// TODO(fuchsia): Port, see https://crbug.com/706592.\n"
+     "#else\n"
+     "  ReportMallinfoStats(/*pmd=*/nullptr, &total_virtual_size, &resident_size,\n"
+     "                      &allocated_objects_size, &allocated_objects_count);\n"
+     "#endif\n",
+     "#elif BUILDFLAG(IS_FUCHSIA)\n"
+     "// TODO(fuchsia): Port, see https://crbug.com/706592.\n"
+     "#elif BUILDFLAG(IS_HAIKU)\n"
+     "// Haiku has no mallinfo(); see the guard on ReportMallinfoStats above.\n"
+     "#else\n"
+     "  ReportMallinfoStats(/*pmd=*/nullptr, &total_virtual_size, &resident_size,\n"
+     "                      &allocated_objects_size, &allocated_objects_count);\n"
+     "#endif\n"),
+
+    # The last per-OS files, each in port/files/: Blink's per-character font
+    # fallback (which goes through HaikuFontMgr), the default form-control
+    # theme, the renderer's sandbox hook (there is no sandbox), the GPU's
+    # native surface (there is no GL), ANGLE's thread naming, PartitionAlloc's
+    # stack collector, and the test root store.
+    ("third_party/blink/renderer/platform/BUILD.gn",
+     '  if (is_fuchsia) {\n'
+     '    sources += [ "fonts/fuchsia/font_cache_fuchsia.cc" ]\n'
+     '  }\n',
+     '  if (is_fuchsia) {\n'
+     '    sources += [ "fonts/fuchsia/font_cache_fuchsia.cc" ]\n'
+     '  }\n'
+     '\n'
+     '  if (is_haiku) {\n'
+     '    sources += [ "fonts/haiku/font_cache_haiku.cc" ]\n'
+     '  }\n'),
+    ("third_party/blink/renderer/core/layout/build.gni",
+     '  blink_core_sources_layout += [ "layout_theme_fuchsia.cc" ]\n',
+     '  blink_core_sources_layout += [ "layout_theme_fuchsia.cc" ]\n'
+     '}\n'
+     '\n'
+     'if (is_haiku) {\n'
+     '  blink_core_sources_layout += [ "layout_theme_haiku.cc" ]\n'),
+    ("content/renderer/BUILD.gn",
+     '  if (is_linux || is_chromeos) {\n'
+     '    sources += [ "renderer_main_platform_delegate_linux.cc" ]\n',
+     '  if (is_haiku) {\n'
+     '    sources += [ "renderer_main_platform_delegate_haiku.cc" ]\n'
+     '  }\n'
+     '\n'
+     '  if (is_linux || is_chromeos) {\n'
+     '    sources += [ "renderer_main_platform_delegate_linux.cc" ]\n'),
+    ("gpu/ipc/service/BUILD.gn",
+     '  if (is_fuchsia) {\n'
+     '    sources += [ "image_transport_surface_fuchsia.cc" ]\n',
+     '  if (is_haiku) {\n'
+     '    sources += [ "image_transport_surface_haiku.cc" ]\n'
+     '  }\n'
+     '  if (is_fuchsia) {\n'
+     '    sources += [ "image_transport_surface_fuchsia.cc" ]\n'),
+    ("base/allocator/partition_allocator/src/partition_alloc/BUILD.gn",
+     '      if (is_linux || is_chromeos) {\n'
+     '        sources += [ "partition_alloc_base/debug/stack_trace_linux.cc" ]\n',
+     '      if (is_haiku) {\n'
+     '        sources += [ "partition_alloc_base/debug/stack_trace_haiku.cc" ]\n'
+     '      }\n'
+     '\n'
+     '      if (is_linux || is_chromeos) {\n'
+     '        sources += [ "partition_alloc_base/debug/stack_trace_linux.cc" ]\n'),
+
+    # Idle detection, the file picker and drag-and-drop's backing store:
+    # Haiku takes the same files Fuchsia does -- idle_fuchsia.cc and
+    # select_file_dialog_fuchsia.cc are "not implemented" stubs with nothing
+    # Fuchsia-specific in them, and os_exchange_data_provider_non_backed is
+    # the plain in-process clipboard/drag provider that every platform without
+    # a native one uses. content_shell has no file picker and no idle API.
+    ("ui/base/idle/BUILD.gn",
+     '  if (is_fuchsia) {\n'
+     '    sources += [ "idle_fuchsia.cc" ]\n'
+     '  }\n',
+     '  if (is_fuchsia || is_haiku) {\n'
+     '    sources += [ "idle_fuchsia.cc" ]\n'
+     '  }\n'),
+    ("ui/shell_dialogs/BUILD.gn",
+     '  if (is_fuchsia) {\n'
+     '    sources += [ "select_file_dialog_fuchsia.cc" ]\n'
+     '  }\n',
+     '  if (is_fuchsia || is_haiku) {\n'
+     '    sources += [ "select_file_dialog_fuchsia.cc" ]\n'
+     '  }\n'),
+    ("ui/base/BUILD.gn",
+     '  if (is_chromeos || (use_aura && is_linux) || is_fuchsia) {\n'
+     '    sources += [\n'
+     '      "dragdrop/os_exchange_data_provider_non_backed.cc",\n',
+     '  if (is_chromeos || (use_aura && is_linux) || is_fuchsia || is_haiku) {\n'
+     '    sources += [\n'
+     '      "dragdrop/os_exchange_data_provider_non_backed.cc",\n'),
+
+    # Blink asks Skia for a typeface by fontconfig id on every platform that
+    # is not Apple, Android, Windows or Fuchsia -- which on Haiku means
+    # SkFontConfigInterface, a class Chromium only builds with fontconfig.
+    # Haiku has no fontconfig and no such ids: nothing calls this path here
+    # (HaikuFontMgr answers by family and character), so it joins the list of
+    # platforms that do not compile it.
+    ("third_party/blink/renderer/platform/fonts/skia/sktypeface_factory.cc",
+     "#if !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_WIN) && \\\n"
+     "    !BUILDFLAG(IS_FUCHSIA)\n"
+     "  sk_sp<SkFontConfigInterface> fci(SkFontConfigInterface::RefGlobal());\n",
+     "#if !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_WIN) && \\\n"
+     "    !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_HAIKU)\n"
+     "  sk_sp<SkFontConfigInterface> fci(SkFontConfigInterface::RefGlobal());\n"),
+
+    # BoringSSL: the define has to be on the config every target gets, not on
+    # the no-asm one, which only an MSan build uses.
+    ("third_party/boringssl/BUILD.gn",
+     '  defines = [ "OPENSSL_SMALL" ]\n',
+     '  defines = [ "OPENSSL_SMALL" ]\n'
+     '  if (is_haiku) {\n'
+     '    # No cpu_aarch64_*.cc knows Haiku, so there is no\n'
+     '    # OPENSSL_cpuid_setup() to call: take the baseline features.\n'
+     '    defines += [ "OPENSSL_STATIC_ARMCAP" ]\n'
+     '  }\n'),
+
+    # ffmpeg links librt for clock_gettime. Haiku keeps clock_gettime in
+    # libroot and has no librt at all, so the link stops with "unable to find
+    # library -lrt".
+    ("third_party/ffmpeg/BUILD.gn",
+     '      # librt for clock_gettime on precise\n'
+     '      libs += [\n'
+     '        "m",\n'
+     '        "z",\n'
+     '        "rt",\n'
+     '      ]\n',
+     '      # librt for clock_gettime on precise. Haiku has clock_gettime in\n'
+     '      # libroot and ships no librt.\n'
+     '      libs += [\n'
+     '        "m",\n'
+     '        "z",\n'
+     '      ]\n'
+     '      if (!is_haiku) {\n'
+     '        libs += [ "rt" ]\n'
+     '      }\n'),
+
+    # //content/browser names scoped_refptr<gpu::GpuChannelHost> in a function
+    # signature regardless of ENABLE_GPU_CHANNEL_MEDIA_CAPTURE, while the
+    # header that declares the type is included only when the flag is on. On
+    # every platform in that flag's list the mismatch is invisible; Haiku is
+    # not in it (there is no GPU process here), so the forward declaration has
+    # to come from somewhere.
+    ("content/browser/video_capture_service_impl.cc",
+     '#if BUILDFLAG(IS_WIN)\n'
+     '#define CREATE_IN_PROCESS_TASK_RUNNER base::ThreadPool::CreateCOMSTATaskRunner\n',
+     '#if !BUILDFLAG(ENABLE_GPU_CHANNEL_MEDIA_CAPTURE)\n'
+     '// BindInProcessInstance() takes a gpu::GpuChannelHost whether or not it\n'
+     '// has anything to do with it.\n'
+     '#include "gpu/ipc/client/gpu_channel_host.h"\n'
+     '#endif\n'
+     '\n'
+     '#if BUILDFLAG(IS_WIN)\n'
+     '#define CREATE_IN_PROCESS_TASK_RUNNER base::ThreadPool::CreateCOMSTATaskRunner\n'),
+
+    # The zygote. `is_posix && !is_android && !is_apple` makes Haiku a zygote
+    # platform, and RunZygote() then calls ContentMainDelegate::ZygoteStarting,
+    # which only exists for Linux and ChromeOS. Haiku has none of what the
+    # zygote is for either -- no fork sandbox, no /proc -- and the launcher
+    # runs single-process anyway.
+    ("content/public/common/zygote/features.gni",
+     "use_zygote = is_posix && !is_android && !is_apple\n",
+     "use_zygote = is_posix && !is_android && !is_apple && !is_haiku\n"),
+
+    # Screen capture. The mojo interfaces declare FocusCapturedSurface and
+    # the MediaDevices methods for every platform, while //content implements
+    # them behind ENABLE_SCREEN_CAPTURE, so a platform outside that list
+    # leaves MediaDevicesDispatcherHost abstract. Haiku is a desktop, so it
+    # joins the list rather than having every call site guarded.
+    ("content/public/common/features.gni",
+     "enable_screen_capture = is_linux || is_chromeos || (is_apple && use_blink) ||\n"
+     "                        is_win || is_android || is_fuchsia\n",
+     "enable_screen_capture = is_linux || is_chromeos || (is_apple && use_blink) ||\n"
+     "                        is_win || is_android || is_fuchsia || is_haiku\n"),
+
+    # In-product help (feature_engagement) declares its desktop feature
+    # constants behind a platform list, and //components/autofill names them
+    # without one, so every suggestion generator fails to compile on a
+    # platform the list omits. Haiku joins the desktop set in both the header
+    # and the definitions; the features themselves do nothing here, because
+    # content_shell has no IPH UI.
+    ("components/feature_engagement/public/feature_constants.h",
+     "#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \\\n"
+     "    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_FUCHSIA)\n",
+     "#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \\\n"
+     "    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) ||               \\\n"
+     "    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_HAIKU)\n"),
+    ("components/feature_engagement/public/feature_constants.cc",
+     "#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \\\n"
+     "    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_FUCHSIA)\n",
+     "#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \\\n"
+     "    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) ||               \\\n"
+     "    BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_HAIKU)\n"),
+
+    # Safe Browsing's download file-type list is generated per platform, and
+    # an unknown one is spelled "unknown_target_arch", which the generator
+    # then refuses. The Linux list is the right one for Haiku: the same
+    # executable, archive and script types matter.
+    ("components/safe_browsing/content/resources/BUILD.gn",
+     '  } else if (is_linux) {\n'
+     '    target_arch = "linux"\n',
+     '  } else if (is_linux || is_haiku) {\n'
+     '    target_arch = "linux"\n'),
+
+    # Six #error walls of the same kind: a platform switch with no arm for
+    # Haiku. Each takes the Linux answer, which is what Haiku behaves like in
+    # every one of these (a desktop, syncable, non-mobile OS).
+    ("components/content_settings/core/browser/website_settings_registry.cc",
+     '#elif BUILDFLAG(IS_FUCHSIA)\n'
+     '  if (!(platform & PLATFORM_FUCHSIA))\n'
+     '    return nullptr;\n'
+     '#else\n'
+     '#error "Unsupported platform"\n',
+     '#elif BUILDFLAG(IS_FUCHSIA)\n'
+     '  if (!(platform & PLATFORM_FUCHSIA))\n'
+     '    return nullptr;\n'
+     '#elif BUILDFLAG(IS_HAIKU)\n'
+     '  if (!(platform & PLATFORM_LINUX))\n'
+     '    return nullptr;\n'
+     '#else\n'
+     '#error "Unsupported platform"\n'),
+    ("components/policy/core/common/cloud/cloud_policy_util.cc",
+     '#elif BUILDFLAG(IS_CHROMEOS)\n'
+     '  NOTREACHED();\n'
+     '#else\n'
+     '#error Unsupported platform\n',
+     '#elif BUILDFLAG(IS_CHROMEOS)\n'
+     '  NOTREACHED();\n'
+     '#elif BUILDFLAG(IS_HAIKU)\n'
+     '  // Same as the POSIX path above: the machine name is what Haiku has.\n'
+     '  char hostname[HOST_NAME_MAX + 1] = {};\n'
+     '  if (gethostname(hostname, sizeof(hostname) - 1) == 0) {\n'
+     '    return std::string(hostname);\n'
+     '  }\n'
+     '  return std::string();\n'
+     '#else\n'
+     '#error Unsupported platform\n'),
+    ("components/sync_device_info/local_device_info_util.cc",
+     '#elif BUILDFLAG(IS_FUCHSIA)\n'
+     '  return DeviceInfo::OsType::kFuchsia;\n'
+     '#else\n'
+     '#error Please handle your new device OS here.\n',
+     '#elif BUILDFLAG(IS_FUCHSIA)\n'
+     '  return DeviceInfo::OsType::kFuchsia;\n'
+     '#elif BUILDFLAG(IS_HAIKU)\n'
+     '  return DeviceInfo::OsType::kLinux;\n'
+     '#else\n'
+     '#error Please handle your new device OS here.\n'),
+    ("components/trusted_vault/trusted_vault_connection_impl.cc",
+     '#elif BUILDFLAG(IS_FUCHSIA)\n'
+     '  // Not used in Fuchsia.\n'
+     '  return trusted_vault_pb::PhysicalDeviceMetadata::DEVICE_TYPE_UNKNOWN;\n'
+     '#else\n'
+     '#error Please handle your new device OS here.\n',
+     '#elif BUILDFLAG(IS_FUCHSIA)\n'
+     '  // Not used in Fuchsia.\n'
+     '  return trusted_vault_pb::PhysicalDeviceMetadata::DEVICE_TYPE_UNKNOWN;\n'
+     '#elif BUILDFLAG(IS_HAIKU)\n'
+     '  return trusted_vault_pb::PhysicalDeviceMetadata::DEVICE_TYPE_LINUX;\n'
+     '#else\n'
+     '#error Please handle your new device OS here.\n'),
+    ("components/variations/service/variations_service.cc",
+     '#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_BSD) || BUILDFLAG(IS_SOLARIS)\n',
+     '#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_BSD) || BUILDFLAG(IS_SOLARIS) || \\\n'
+     '    BUILDFLAG(IS_HAIKU)\n'),
+    ("components/webui/flags/flags_state.cc",
+     '#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_OPENBSD)\n'
+     '  return kOsLinux;\n',
+     '#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_OPENBSD) || BUILDFLAG(IS_HAIKU)\n'
+     '  return kOsLinux;\n'),
+
+    # The component updater's OS string. Nothing here updates components, but
+    # the file is compiled and #errors on an OS it does not know.
+    ("components/update_client/update_query_params.cc",
+     '#elif BUILDFLAG(IS_OPENBSD)\n'
+     '    "openbsd";\n'
+     '#else\n'
+     '#error "unknown os"\n',
+     '#elif BUILDFLAG(IS_OPENBSD)\n'
+     '    "openbsd";\n'
+     '#elif BUILDFLAG(IS_HAIKU)\n'
+     '    "haiku";\n'
+     '#else\n'
+     '#error "unknown os"\n'),
+
+    # crashpad has no Haiku port -- its util does not even define the address
+    # types for this OS -- and content_shell's crash reporting is optional
+    # (--enable-crash-reporter) with the crash keys already stubbed out here
+    # (use_crash_key_stubs is true for Haiku). So the whole crashpad side is
+    # left out, the way Fuchsia leaves it out.
+    ("content/shell/BUILD.gn",
+     '  sources = [\n'
+     '    "app/shell_crash_reporter_client.cc",\n'
+     '    "app/shell_crash_reporter_client.h",\n'
+     '    "app/shell_main_delegate.cc",\n'
+     '    "app/shell_main_delegate.h",\n'
+     '  ]\n',
+     '  sources = [\n'
+     '    "app/shell_main_delegate.cc",\n'
+     '    "app/shell_main_delegate.h",\n'
+     '  ]\n'
+     '  if (!is_haiku) {\n'
+     '    sources += [\n'
+     '      "app/shell_crash_reporter_client.cc",\n'
+     '      "app/shell_crash_reporter_client.h",\n'
+     '    ]\n'
+     '  }\n'),
+    ("content/shell/BUILD.gn",
+     '  if (!is_fuchsia) {\n'
+     '    deps += [\n'
+     '      "//components/crash/core/app",\n'
+     '      "//components/crash/core/app:test_support",\n'
+     '    ]\n'
+     '  }\n',
+     '  if (!is_fuchsia && !is_haiku) {\n'
+     '    deps += [\n'
+     '      "//components/crash/core/app",\n'
+     '      "//components/crash/core/app:test_support",\n'
+     '    ]\n'
+     '  }\n'),
+    # content_shell_lib reaches the same place through its own else-branch.
+    ("content/shell/BUILD.gn",
+     '    deps += [ "//third_party/fuchsia-sdk/sdk/fidl/fuchsia.element:fuchsia.element_hlcpp" ]\n'
+     '  } else {\n'
+     '    deps += [\n'
+     '      "//components/crash/content/browser",\n'
+     '      "//components/crash/core/app",\n'
+     '    ]\n'
+     '  }\n',
+     '    deps += [ "//third_party/fuchsia-sdk/sdk/fidl/fuchsia.element:fuchsia.element_hlcpp" ]\n'
+     '  } else if (!is_haiku) {\n'
+     '    deps += [\n'
+     '      "//components/crash/content/browser",\n'
+     '      "//components/crash/core/app",\n'
+     '    ]\n'
+     '  }\n'),
+
+    # Enterprise policy. The policy templates know no "haiku" platform, and a
+    # platform with no policies at all produces a cloud_policy.proto whose
+    # import of policy_common_definitions.proto is unused -- which protoc,
+    # run with --fatal_warnings, rejects. Haiku's policy surface is a desktop
+    # Linux one, so it reads that list.
+    ("components/policy/tools/generate_policy_source.gni",
+     '      "--target-platform=" + target_os,\n',
+     '      "--target-platform=" + _policy_target_platform,\n'),
+    ("components/policy/tools/generate_policy_source.gni",
+     '    script = "//components/policy/tools/generate_policy_source.py"\n',
+     '    script = "//components/policy/tools/generate_policy_source.py"\n'
+     '\n'
+     '    _policy_target_platform = target_os\n'
+     '    if (target_os == "haiku") {\n'
+     '      _policy_target_platform = "linux"\n'
+     '    }\n'),
+    ("content/shell/app/shell_main_delegate.cc",
+     '#include "content/shell/app/shell_crash_reporter_client.h"\n',
+     '#if !BUILDFLAG(IS_HAIKU)\n'
+     '#include "content/shell/app/shell_crash_reporter_client.h"\n'
+     '#endif\n'),
+    ("content/shell/app/shell_main_delegate.cc",
+     '#if !BUILDFLAG(IS_FUCHSIA)\n'
+     '#include "components/crash/core/app/crashpad.h"  // nogncheck\n'
+     '#endif\n',
+     '#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_HAIKU)\n'
+     '#include "components/crash/core/app/crashpad.h"  // nogncheck\n'
+     '#endif\n'),
+    ("content/shell/app/shell_main_delegate.cc",
+     '#if !BUILDFLAG(IS_FUCHSIA)\n'
+     'content::ShellCrashReporterClient& GetShellCrashReporterClient() {\n',
+     '#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_HAIKU)\n'
+     'content::ShellCrashReporterClient& GetShellCrashReporterClient() {\n'),
+    ("content/shell/app/shell_main_delegate.cc",
+     '#if !BUILDFLAG(IS_FUCHSIA)\n'
+     '  if (base::CommandLine::ForCurrentProcess()->HasSwitch(\n'
+     '          switches::kEnableCrashReporter)) {\n',
+     '#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_HAIKU)\n'
+     '  if (base::CommandLine::ForCurrentProcess()->HasSwitch(\n'
+     '          switches::kEnableCrashReporter)) {\n'),
+
+    # Same reason, two more doors into //chrome. //extensions names
+    # //chrome:resources and //chrome/common:buildflags from its renderer and
+    # test-support targets, and loading either chrome file defines the whole
+    # browser's target graph, which then has to resolve. content_shell has no
+    # extensions, and this tree only ever builds for Haiku, so both deps are
+    # dropped outright rather than guarded.
+    ("extensions/renderer/BUILD.gn",
+     '    "//build:android_buildflags",\n'
+     '    "//build:chromeos_buildflags",\n'
+     '    "//chrome:resources",\n'
+     '    "//components/crx_file",\n',
+     '    "//build:android_buildflags",\n'
+     '    "//build:chromeos_buildflags",\n'
+     '    "//components/crx_file",\n'),
+    ("extensions/BUILD.gn",
+     '    "//build:chromeos_buildflags",\n'
+     '    "//chrome/common:buildflags",\n'
+     '    "//components/crx_file",\n',
+     '    "//build:chromeos_buildflags",\n'
+     '    "//components/crx_file",\n'),
+
+    ("content/test/BUILD.gn",
+     'group("telemetry_gpu_integration_test_scripts_only") {\n'
+     '  testonly = true\n'
+     '  deps = [\n'
+     '    "//tools/perf/chrome_telemetry_build:telemetry_chrome_test_without_chrome",\n'
+     '  ]\n',
+     'group("telemetry_gpu_integration_test_scripts_only") {\n'
+     '  testonly = true\n'
+     '  deps = []\n'
+     '  if (!is_haiku) {\n'
+     '    deps += [ "//tools/perf/chrome_telemetry_build:telemetry_chrome_test_without_chrome" ]\n'
+     '  }\n'),
 ]
 
 

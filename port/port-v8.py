@@ -236,6 +236,18 @@ EDITS = [
      "#endif\n"
      "#elif V8_OS_LINUX\n"
      "#if V8_HOST_ARCH_IA32\n"),
+
+    # TLS model. V8 picks "local-exec" for everything that is neither Windows
+    # nor Android, which is right when the binary is an ET_EXEC. Haiku links
+    # every executable as ET_DYN, so lld rejects the local-exec relocations
+    # with "cannot be used with -shared". "initial-exec" is the next fastest
+    # model and is what Windows already uses for the same reason: the variable
+    # still lives in the initial TLS block, only addressed through the GOT.
+    ("v8/src/common/thread-local-storage.h",
+     "#elif defined(V8_TARGET_OS_ANDROID)\n"
+     "#define V8_TLS_MODEL \"local-dynamic\"\n",
+     "#elif defined(V8_TARGET_OS_ANDROID) || defined(V8_TARGET_OS_HAIKU)\n"
+     "#define V8_TLS_MODEL \"local-dynamic\"\n"),
 ]
 
 COPIES = [

@@ -69,11 +69,13 @@ int32 AppThreadEntry(void*) {
   return 0;
 }
 
+const char kContentViewName[] = "ChromiumView";
+
 class ShimView : public BView {
  public:
   ShimView(BRect frame, Delegate* delegate)
       : BView(frame,
-              "ChromiumView",
+              kContentViewName,
               B_FOLLOW_ALL_SIDES,
               B_WILL_DRAW | B_FRAME_EVENTS | B_NAVIGABLE),
         delegate_(delegate),
@@ -96,7 +98,16 @@ class ShimView : public BView {
     }
   }
 
+  // BWindow delivers KeyDown only to its focus view. Without taking focus
+  // here, a click in the page left focus on the address field (or on no view
+  // at all), so typing into a web form went nowhere.
+  void AttachedToWindow() {
+    BView::AttachedToWindow();
+    MakeFocus(true);
+  }
+
   void MouseDown(BPoint where) {
+    MakeFocus(true);
     int32 buttons = 0;
     int32 clicks = 1;
     BMessage* msg = BView::Window()->CurrentMessage();
@@ -689,6 +700,11 @@ class BrowserChromeView : public BView, public BookmarkOpener {
       case kMsgGo:
         delegate_->OnNavigateToURL(
             address_->Text() != NULL ? address_->Text() : "");
+        // Hand the keyboard to the page, as other browsers do. Left in the
+        // field, the next keystrokes edit the URL instead of the page, and
+        // SetAddress() keeps skipping updates because the field has focus.
+        if (BView* content = Window()->FindView(kContentViewName))
+          content->MakeFocus(true);
         return;
       case kMsgAddBookmark:
         BookmarkStore::Get().Add(current_url_, current_title_);

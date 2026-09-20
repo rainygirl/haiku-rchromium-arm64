@@ -364,6 +364,164 @@ How it was verified: `--remote-debugging-port=9222` + an ssh tunnel + a
 `[innerWidth, innerHeight]`) before and after a QMP corner drag; `window.open`
 from CDP for the new-window case; QMP screendumps for the tab.
 
+## Typing into web pages (fixed 2026-09-19)
+
+Symptom: clicking a form field showed the focus ring and caret, but typed
+text never arrived (an X login could not be filled in). The address field
+took typing normally.
+
+**Fixed in the shim: keyboard focus.** `ShimView` never called `MakeFocus`,
+so BWindow sent `B_KEY_DOWN` to the address field or to no view, and
+`ShimView::KeyDown` never ran. The view now takes focus in
+`AttachedToWindow` and `MouseDown`. Pressing Enter in the address field also
+moves focus back to the page, as other browsers do. Before, the next
+keystrokes edited the URL, and `SetAddress` kept skipping updates because the
+field was focused. Verified on the renku-stock-2g VM over QMP: after a click,
+`abc XYZ 123`, Backspace and Tab reach the page.
+
+**Fixed in the ozone layer: punctuation.** `HaikuEventBridge::OnKey`
+(`haiku_beapi.cc`) built its `KeyEvent` from `KeyboardCodeFromByte(bytes[0])`,
+which knows only B_* keys, a-z and 0-9, so `. , - _ / @` arrived as
+`Unidentified`/keyCode 0 and were never inserted. The event now carries a
+`DomKey::FromCharacter()` decoded from the UTF-8 bytes (skipped when Ctrl,
+Alt or Command is held, so shortcuts still work), with the DomCode and, if
+needed, the key code derived from it.
+
+**Fixed in the shell delegate: focus before the first click.** At startup
+`document.hasFocus()` was false and keys were dropped even though `ShimView`
+had focus; only a mouse press in the page fixed it, via
+`RenderWidgetHostViewEventHandler::SetKeyboardFocus()`. Calling
+`WebContents::Focus()` from `SetContents` is not enough on its own:
+`RenderWidgetHostViewAura::Focus()` does nothing until the view has a focus
+client and its window can take focus, and the view is created and shown
+asynchronously. `shell_platform_delegate_haiku.cc` now retries the focus on
+later turns of the loop (50 ms apart, up to 30 times) and stops as soon as
+the view reports focus.
+
+Verified against the real x.com login form on the renku-stock-2g VM:
+`test.user_99@example.com` types into the username field with no click first,
+the password field accepts text, and Tab moves between them.
+
+**Building only the shim, without the Chromium container.** The local
+`haiku-builder` container (colima) has Haiku's own arm64 cross gcc 13.3.0 at
+`/root/renku-arm64-work/generated.arm64/cross-tools-arm64/bin`. Its sysroot
+directory no longer exists, so point `--sysroot` at a directory whose
+`boot/system/develop/headers` links to the `haiku_devel` package contents
+(`objects/haiku/arm64/packaging/packages_build/minimum/hpkg_-haiku_devel.hpkg/contents/develop/headers`).
+Link with `-L` pointing at real copies of `release/kits/libbe.so`,
+`release/system/libroot/revisioned/libroot.so` and gcc_syslibs'
+`libstdc++.so*`. The `.so` links inside `haiku_devel` are relative Haiku paths
+and dangle on Linux. Built unchanged, the shim matches the release shim's
+dynamic symbols and LOAD layout exactly. To test without repackaging, run
+`content_shell` with `LIBRARY_PATH=/boot/home/shim:%A/lib:/boot/system/lib`.
+The stock VM has no curl, python, awk or bash `/dev/tcp`; WebPositive can
+download from a host `http.server` at `http://10.0.2.2:<port>/`.
+
+## Backtraces on Haiku (added 2026-09-19)
+
+Every crash used to print `[end of stack trace]` with nothing above it, which
+is why the bugs below took so long to find. `stack_trace_posix.cc` looks for
+`<execinfo.h>`, which on Haiku is the HaikuPorts libexecinfo package rather
+than part of the base system, so `HAVE_BACKTRACE` stayed unset and
+`CollectStackTrace()` returned zero frames.
+
+Nothing extra is needed: the build emits `.eh_frame` and libc++abi already
+links an unwinder, so `_Unwind_Backtrace` walks the stack.
+`port/files/base/debug/unwind_backtrace_haiku.h` does that and also prints the
+image map -- a Haiku executable is ET_DYN, so a bare runtime address cannot be
+handed to `addr2line` without knowing where its image was mapped. Subtract the
+image base from the printed address and run
+`aarch64-unknown-haiku-addr2line -Cfpie content_shell <offset>`.
+
+**The unwinder cannot walk through a Haiku signal frame.** For a SIGSEGV the
+trace stops at the handler and says nothing useful. What does say something is
+`elr` (the faulting PC) and `lr` from `struct vregs`
+(`headers/posix/arch/arm64/signal.h`), which the handler now prints as
+`[haiku] elr=... lr=...`. That is what located the null dereference in the
+media capture factory; the backtrace alone never would have.
+
+`<ucontext.h>` does not exist on Haiku -- `<signal.h>` declares `ucontext_t`
+and the arm64 `mcontext_t`.
+
+## Thread stacks: 256 kB is not enough (fixed 2026-09-19)
+
+Haiku gives the main thread 64 MB (`USER_MAIN_THREAD_STACK_SIZE`) and every
+other thread 256 kB (`USER_STACK_SIZE`, `64 * B_PAGE_SIZE`). Chromium and V8
+are written against the glibc default of 8 MB; V8 in particular sets its own
+stack limit from `--stack-size`, which defaults to about 1 MB, so the
+interpreter recurses past the end of a 256 kB stack long before its own guard
+fires.
+
+Chromium already fills this hook in for the platforms whose default is too
+small -- `platform_thread_apple.mm` returns 8 MB because macOS gives 512 kB,
+and iOS asks for 1 MB. This port left `GetDefaultThreadStackSize()` returning
+0, which means "keep the platform default". It now returns 8 MB.
+
+The x86 port had the identical hole; see its
+`0090-give-non-main-threads-a-usable-stack-on-haiku.patch`, where the symptom
+was unmistakable -- a Haiku crash report full of
+`Builtins_InterpreterEntryTrampoline` frames ending in "Frame memory:
+Unavailable (Bad address)".
+
+## Thread names were never set (fixed 2026-09-19)
+
+`PlatformThreadBase::SetName` skipped `rename_thread` for the main thread, as
+Linux does, but tested `thread_info::team == getpid()`. That is the team id,
+which is the same for every thread in the team, so *no* thread was ever
+renamed and `top`, `ps` and the crash reporter showed them all alike. Haiku
+gives a team the id of its main thread, so comparing the thread id against
+`getpid()` is the test that was meant.
+
+## x.com and the V8 AstValueFactory corruption (open)
+
+Loading `https://x.com/i/flow/login` crashes the renderer, usually as
+`Check failed: std::numeric_limits<int>::max() >= length_.` in
+`v8::base::Vector::length()`, sometimes as a SIGSEGV. Both land in
+`AstRawString::Equal`, reached from `AstValueFactory::GetString` through the
+string table's `Resize`/`Probe`: a key in that map does not point at a live
+`AstRawString`.
+
+What the memory looks like at the failure: the object's 16 bytes hold other
+strings' bytes (`.countries-zh`, `ondemand`), or a pointer plus a 32-bit hash,
+or `length_ == (size_t)-1`. It differs every run. The surrounding zone memory
+is live and coherent, and an `AstRawString` can only be allocated from
+`AstStringConstants`' own zone or from `ast_raw_string_zone` -- so what is
+being read is not a freed string but memory that something else is now using.
+
+Ruled out, each with a diagnostic build rather than by argument: thread stack
+overflow (8 MB stack, 16 kB used at the failure); V8's own stack limit
+(`--stack-size=200` changes nothing); Haiku dynamic TLS (a six-thread
+local-dynamic test passes, and the whole PT_TLS segment is 1144 bytes); ICU
+symbol collision (content_shell exports no ICU symbols); `memcpy`/`memmove`
+overrun (48 sizes x 16 alignments, clean); arm64 outline atomics (all 101
+helpers are defined in the binary); the rehash loop walking off the end of the
+old map; the allocator handing out overlapping blocks; a use-after-free of a
+released zone segment (checked with a ring of released segments that is
+invalidated when the address is handed out again); use of a destroyed
+`AstValueFactory`; and V8's lazy compile dispatcher
+(`--js-flags=--no-lazy-compile-dispatcher` still crashes).
+
+What does make it go away: `--js-flags=--single-threaded`, and, unhelpfully,
+almost any change that shifts timing or layout -- guard pages under the hash
+map's allocator, leaking zone segments instead of freeing them, adding a
+member to `AstValueFactory`, adding an atomic to `GetString`. That pattern is
+the strongest evidence there is that this is a race, and it is also why every
+diagnostic has to be weighed against the possibility that it hid the bug
+rather than explained it.
+
+Where to look next: what this port supplies underneath V8 that could break the
+sequencing Chromium assumes. The message pump is the first suspect, because
+`eventfd` here is a UDP socket connected to itself
+(`port/files/base/message_loop/epoll_shim_haiku.h`) and a lost or misdelivered
+wake-up would let work run out of order. A build with `dcheck_always_on=true`
+is the other obvious move: V8's zone and parser carry thread-affinity DCHECKs
+that would name the violation outright.
+
+Comparing against an upstream Linux arm64 build of the same revision would
+settle whether this is the port at all, but that build is blocked: Chromium's
+Rust host build tools are x86_64 and fail under this aarch64 container, and
+`enable_rust=false` breaks content_shell's mojom rust target.
+
 ## fd 0 closed under the browser: the intermittent naver crash (fixed 2026-09-15)
 
 Symptom (2026-09-14/15 builds, single-process launcher, heavy pages): a few

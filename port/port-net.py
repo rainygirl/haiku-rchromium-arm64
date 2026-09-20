@@ -145,16 +145,14 @@ EDITS = [
      "// Haiku has no ip_mreqn, so a multicast interface is named by address\n"
      "// rather than by index. Resolve the index the caller gave us.\n"
      "bool MulticastInterfaceAddress(uint32_t index, in_addr* out) {\n"
-     "  char name[IF_NAMESIZE] = {};\n"
-     "  if (!if_indextoname(index, name)) {\n"
+     "  ifreq req = {};\n"
+     "  if (!if_indextoname(index, req.ifr_name)) {\n"
      "    return false;\n"
      "  }\n"
      "  base::ScopedFD fd(socket(AF_INET, SOCK_DGRAM, 0));\n"
      "  if (!fd.is_valid()) {\n"
      "    return false;\n"
      "  }\n"
-     "  ifreq req = {};\n"
-     "  strncpy(req.ifr_name, name, IF_NAMESIZE - 1);\n"
      "  if (ioctl(fd.get(), SIOCGIFADDR, &req) < 0) {\n"
      "    return false;\n"
      "  }\n"
@@ -262,30 +260,6 @@ EDITS = [
      "  int imr_ifindex;\n"
      "};\n"
      "#endif  // BUILDFLAG(IS_HAIKU)\n"),
-
-    # if_indextoname writes into a buffer of exactly IF_NAMESIZE bytes, and
-    # ifreq::ifr_name is declared as char[IF_NAMESIZE] -- so name the
-    # interface in place. This also drops a strncpy that Chromium's
-    # -Wunsafe-buffer-usage-in-libc-call rejects outright.
-    ("net/socket/udp_socket_posix.cc",
-     "  char name[IF_NAMESIZE] = {};\n"
-     "  if (!if_indextoname(index, name)) {\n"
-     "    return false;\n"
-     "  }\n"
-     "  base::ScopedFD fd(socket(AF_INET, SOCK_DGRAM, 0));\n"
-     "  if (!fd.is_valid()) {\n"
-     "    return false;\n"
-     "  }\n"
-     "  ifreq req = {};\n"
-     "  strncpy(req.ifr_name, name, IF_NAMESIZE - 1);\n",
-     "  ifreq req = {};\n"
-     "  if (!if_indextoname(index, req.ifr_name)) {\n"
-     "    return false;\n"
-     "  }\n"
-     "  base::ScopedFD fd(socket(AF_INET, SOCK_DGRAM, 0));\n"
-     "  if (!fd.is_valid()) {\n"
-     "    return false;\n"
-     "  }\n"),
 
     # Haiku carries no peer credentials on a unix socket: the sysroot has
     # neither SO_PEERCRED nor getpeereid(). Report failure rather than invent

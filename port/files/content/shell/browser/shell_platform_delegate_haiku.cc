@@ -16,8 +16,14 @@
 #include <memory>
 #include <string>
 
+#include "base/functional/bind.h"
+#include "base/location.h"
+#include "base/logging.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/shell/browser/shell.h"
@@ -86,6 +92,44 @@ class HostResizeObserver : public aura::WindowTreeHostObserver {
     }
   }
 };
+
+void FocusContentsSoon(base::WeakPtr<WebContents> contents, int attempts_left);
+
+// Focus the page, retrying on later turns of the loop while there is still
+// nothing focusable. RenderWidgetHostViewAura::Focus() is a no-op until the
+// view has a focus client and its window can take focus, and the view itself
+// is created and shown asynchronously, so the first attempt -- made from
+// SetContents -- routinely comes too early.
+void FocusContentsNow(base::WeakPtr<WebContents> contents, int attempts_left) {
+  WebContents* web_contents = contents.get();
+  if (!web_contents) {
+    return;
+  }
+  RenderWidgetHostView* view = web_contents->GetRenderWidgetHostView();
+  if (view && view->HasFocus()) {
+    return;
+  }
+  web_contents->Focus();
+  view = web_contents->GetRenderWidgetHostView();
+  if (view && view->HasFocus()) {
+    return;
+  }
+  if (attempts_left <= 0) {
+    LOG(ERROR) << "haiku: web contents never took focus; view=" << view;
+    return;
+  }
+  FocusContentsSoon(std::move(contents), attempts_left - 1);
+}
+
+void FocusContentsSoon(base::WeakPtr<WebContents> contents, int attempts_left) {
+  // Spread the retries over real time: what is being waited for is the view's
+  // creation and the host window's Show(), and posting without a delay would
+  // burn every attempt in the same millisecond.
+  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE,
+      base::BindOnce(&FocusContentsNow, std::move(contents), attempts_left),
+      base::Milliseconds(50));
+}
 
 }  // namespace
 
@@ -163,6 +207,21 @@ void ShellPlatformDelegate::SetContents(Shell* shell) {
   // views delegate, which calls GetHost()->Show() explicitly. Without this the
   // BWindow stays hidden and only the desktop is visible.
   platform_->aura->ShowWindow();
+
+  // Nothing focuses the contents in this configuration: the aura delegate is
+  // upstream's web-test one, where focus arrives from the test runner, and the
+  // only local focus client is the shell's own. Until the user clicked the
+  // page, document.hasFocus() was false and every key was dropped -- the
+  // click works because RenderWidgetHostViewEventHandler calls
+  // SetKeyboardFocus() on mouse-down.
+  //
+  // Focusing right here is not enough: WebContentsViewAura::Focus() reaches
+  // RenderWidgetHostViewAura::Focus(), which does nothing unless the view
+  // already has a focus client and its window can take focus, and neither is
+  // settled while SetContents is still running. Posting the focus makes it
+  // run once the window tree, the host's Show() and the view's own Show()
+  // have all been processed.
+  FocusContentsSoon(shell->web_contents()->GetWeakPtr(), 30);
 }
 
 void ShellPlatformDelegate::ResizeWebContent(Shell* shell,

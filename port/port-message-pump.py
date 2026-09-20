@@ -32,6 +32,24 @@ H = os.path.join(src, "base/message_loop/message_pump_epoll.h")
 C = os.path.join(src, "base/message_loop/message_pump_epoll.cc")
 
 EDITS = [
+    # With the epoll path compiled out, the buffer it reads into is unused,
+    # and Chromium builds with -Werror.
+    ("base/message_loop/message_pump_epoll.cc",
+     "  // Used in the \"epoll\" code path.\n"
+     "  epoll_event epoll_events[16];\n",
+     "#if !defined(__HAIKU__)\n"
+     "  // Used in the \"epoll\" code path.\n"
+     "  epoll_event epoll_events[16];\n"
+     "#endif\n"),
+
+    # <sys/eventfd.h> does not exist on Haiku; epoll_shim_haiku.h supplies an
+    # eventfd() of its own (a UDP socket connected to itself).
+    ("base/message_loop/message_pump_epoll.cc",
+     "#include <sys/eventfd.h>\n",
+     "#if !defined(__HAIKU__)\n"
+     "#include <sys/eventfd.h>\n"
+     "#endif\n"),
+
     (H,
      "#include <poll.h>\n#include <sys/epoll.h>\n",
      "#include <poll.h>\n"

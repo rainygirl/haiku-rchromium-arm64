@@ -4,6 +4,12 @@
 
 #include "base/process/process_metrics.h"
 
+#include <memory>
+
+#include "base/memory/ptr_util.h"
+#include "base/process/process_handle.h"
+#include "base/time/time.h"
+
 #include <OS.h>
 
 namespace base {
@@ -36,6 +42,48 @@ bool GetSystemMemoryInfo(SystemMemoryInfo* meminfo) {
   meminfo->free = ByteSize(total > in_use ? total - in_use : 0);
 
   return true;
+}
+
+
+// The process-level metrics. Haiku's get_team_usage_info() reports the team's
+// accumulated user and kernel time, which is what GetCumulativeCPUUsage is
+// after; there is no equivalent of /proc/<pid>/stat for the rest.
+ProcessMetrics::ProcessMetrics(ProcessHandle process) : process_(process) {}
+
+// static
+std::unique_ptr<ProcessMetrics> ProcessMetrics::CreateProcessMetrics(
+    ProcessHandle process) {
+  return base::WrapUnique(new ProcessMetrics(process));
+}
+
+base::expected<TimeDelta, ProcessCPUUsageError>
+ProcessMetrics::GetCumulativeCPUUsage() {
+  team_usage_info usage;
+  const team_id team =
+      process_ == base::kNullProcessHandle ? B_CURRENT_TEAM : process_;
+  if (get_team_usage_info(team, B_TEAM_USAGE_SELF, &usage) != B_OK) {
+    return base::unexpected(ProcessCPUUsageError::kSystemError);
+  }
+  // Both fields are bigtime_t, i.e. microseconds.
+  return base::ok(Microseconds(usage.user_time + usage.kernel_time));
+}
+
+
+// Per-process memory. Haiku has no /proc/<pid>/statm; totalling a team's
+// areas through get_next_area_info() would count shared pages once per area,
+// which is worse than saying "unavailable" -- the callers all treat the error
+// as "no figure for this process".
+base::expected<ProcessMemoryInfo, ProcessUsageError>
+ProcessMetrics::GetMemoryInfo() const {
+  return base::unexpected(ProcessUsageError::kSystemError);
+}
+
+ProcessId GetParentProcessId(ProcessHandle process) {
+  team_info info;
+  if (get_team_info(process, &info) != B_OK) {
+    return kNullProcessId;
+  }
+  return info.parent;
 }
 
 }  // namespace base

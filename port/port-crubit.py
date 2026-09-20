@@ -29,13 +29,11 @@ import sys
 # touch different parts of it, but apply-haiku-port.sh runs that one first so
 # the ordering is fixed rather than incidental.
 EDITS = [
-    ("build/config/rust.gni",
-     "enable_cpp_api_from_rust = enable_rust && use_chromium_rust_toolchain &&\n"
-     "                           !rust_prebuilt_stdlib && build_with_chromium\n",
-     "enable_cpp_api_from_rust = enable_rust && use_chromium_rust_toolchain &&\n"
-     "                           !rust_prebuilt_stdlib && build_with_chromium &&\n"
-     '                           target_os != "haiku"\n'),
-
+    # The flag itself is no longer forced off for Haiku: crubit is built from
+    # source here (../rust/build-crubit-arm64.sh) against the replaced rustc,
+    # which is both an arm64 binary and one that knows the Haiku target. What
+    # stays is the empty-group fallback below, which matters whenever the flag
+    # is off for another reason.
     ("build/rust/gni_impl/rust_target.gni",
      "    _cpp_api_from_rust_attributes = invoker.cpp_api_from_rust\n"
      "    if (!enable_cpp_api_from_rust) {\n"

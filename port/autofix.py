@@ -80,10 +80,51 @@ def patch_flag_definition(flag):
     return None
 
 
+def patch_missing_target(label):
+    """`//dir:name` names a target its own BUILD.gn only defines on some
+    platforms. Add Haiku to the condition that guards it -- directly if the
+    condition spells the platforms out, through the flag if it names one."""
+    directory, _, name = label.partition(":")
+    path = os.path.join(SRC, directory.lstrip("/"), "BUILD.gn")
+    if not os.path.exists(path):
+        return None
+    lines = open(path).read().split("\n")
+    define = re.compile(r'^\s*[a-z_]+\(\s*"' + re.escape(name) + r'"\s*\)')
+    for i, line in enumerate(lines):
+        if not define.match(line):
+            continue
+        # The guard is the nearest enclosing `if (...)` above the definition.
+        for j in range(i - 1, max(i - 400, -1), -1):
+            gm = re.match(r"^(\s*)if \((.*)\) \{\s*$", lines[j])
+            if not gm:
+                continue
+            condition = gm.group(2)
+            if "is_haiku" in condition:
+                return None
+            if re.search(PLATFORMS, condition):
+                lines[j] = "%sif (%s || is_haiku) {" % (gm.group(1), condition)
+                open(path, "w").write("\n".join(lines))
+                return "%s:%d  if (%s || is_haiku)" % (path, j + 1, condition)
+            fm = re.match(r"^([a-z_][a-z0-9_]*)$", condition.strip())
+            if fm:
+                return patch_flag_definition(fm.group(1))
+            return None
+    return None
+
+
 def main():
     log = open("/tmp/gna.log").read()
     m = re.search(r"^ERROR at //([^:]+):(\d+):\d+: Assertion failed\.", log, re.M)
     if not m:
+        um = re.search(r"^\s*needs (//[^ (]+)", log, re.M)
+        if um:
+            result = patch_missing_target(um.group(1))
+            if result:
+                print("PATCHED-GUARD %s" % um.group(1))
+                print("  " + result)
+                return 0
+            print("GUARD-NOT-FOUND %s" % um.group(1))
+            return 2
         print("NOT-AN-ASSERT")
         return 2
     rel, line = m.group(1), int(m.group(2))

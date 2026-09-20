@@ -39,25 +39,15 @@ else:
     open(p, "w").write(s.replace(old, new))
     print("  rust.gni: Haiku ABI triples")
 
-# crubit's cc_bindings_from_rs generates C++ bindings for Rust APIs. It links
-# the bundled rustc's internals, so it only knows the targets that rustc was
-# built with -- and this port replaces rustc with one that has a target the
-# bundle does not. Rebuilding crubit against the replacement is possible in
-# principle and a good deal of work; nothing reached so far needs the C++
-# side of a Rust API, so it is off here instead.
-s2 = open(os.path.join(src, "build/config/rust.gni")).read()
-old_crubit = """enable_cpp_api_from_rust = enable_rust && use_chromium_rust_toolchain &&
-                           !rust_prebuilt_stdlib && build_with_chromium"""
-new_crubit = (
-    "enable_cpp_api_from_rust = enable_rust && use_chromium_rust_toolchain &&\n"
-    "                           !rust_prebuilt_stdlib && build_with_chromium &&\n"
-    '                           current_os != "haiku"'
-)
-if "current_os != \"haiku\"" not in s2:
-    assert s2.count(old_crubit) == 1, "crubit condition does not look as expected"
-    open(os.path.join(src, "build/config/rust.gni"), "w").write(
-        s2.replace(old_crubit, new_crubit))
-    print("  rust.gni: crubit off for Haiku")
+# crubit's cc_bindings_from_rs is not switched off here any more. It links
+# rustc's internals, so it only understands metadata from the rustc that built
+# it -- and Chromium's bundled binary is x86_64 besides, so on this host there
+# was nothing to run. ../rust/build-crubit-arm64.sh builds it against the
+# replaced rustc instead, which also teaches it aarch64-unknown-haiku. Turning
+# it off cost two features that have no other implementation: blink's
+# OpenType format checks (variable and colour fonts) and web_package's signed
+# bundle verification, both of which name the generated headers
+# unconditionally.
 
 # Chromium checks the triple against a list of ones it knows.
 t = os.path.join(src, "build/rust/known-target-triples.txt")

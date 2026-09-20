@@ -512,7 +512,35 @@ EDITS = [
      '  }\n'
      '\n'
      '  if (is_haiku) {\n'
-     '    sources += [ "process/process_metrics_haiku.cc" ]\n'
+     '    # base/nix/xdg_util.cc calls xdg_user_dir_lookup().\n'
+     '    deps += [ "//base/third_party/xdg_user_dirs" ]\n'
+     '    sources += [\n'
+     '      # Haiku-specific: system memory comes from get_system_info().\n'
+     '      "process/process_metrics_haiku.cc",\n'
+     '      # Haiku names a thread with rename_thread(), not prctl().\n'
+     '      "threading/platform_thread_haiku.cc",\n'
+     '      # No malloc hook to terminate on OOM, so the Unchecked* family\n'
+     '      # passes straight through, as on every platform without one.\n'
+     '      "process/memory_stubs.cc",\n'
+     '      # No inotify and no kqueue. Haiku watches nodes through libbe,\n'
+     '      # which //base must not link, so the stub Fuchsia uses stands in:\n'
+     '      # Watch() fails and callers fall back to not watching.\n'
+     '      "files/file_path_watcher_stub.cc",\n'
+     '      # Team priority is not a thing Haiku schedules by.\n'
+     '      "process/process_haiku.cc",\n'
+     '      # No /proc/cpuinfo, and no CPU name in get_system_info();\n'
+     '      # physical memory comes from get_system_info() too.\n'
+     '      "system/sys_info_haiku.cc",\n'
+     '      # The executable path comes from get_next_image_info(); the file\n'
+     '      # is patched for that (see port-base-posix.py).\n'
+     '      "base_paths_posix.cc",\n'
+     '      # ELF is ELF: the build-id and program-header readers work here.\n'
+     '      "debug/elf_reader.cc",\n'
+     '      "debug/elf_reader.h",\n'
+     '      # XDG_* is read from the environment, not from anything Linux.\n'
+     '      "nix/xdg_util.cc",\n'
+     '      "nix/xdg_util.h",\n'
+     '    ]\n'
      '  }\n'),
 
     # setproctitle. Haiku has no equivalent and no writable argv area to
@@ -614,6 +642,48 @@ EDITS = [
      "  use_kerberos = !is_ios && !is_fuchsia && !is_castos && !is_cast_android\n",
      "  use_kerberos =\n"
      "      !is_ios && !is_fuchsia && !is_castos && !is_cast_android && !is_haiku\n"),
+
+    # MessagePumpEpoll. The port compiles it with the poll() path forced on
+    # (see port-message-pump.py and base/message_loop/epoll_shim_haiku.h), so
+    # the file has to be in the build -- use_epoll is what puts it there.
+    ("base/BUILD.gn",
+     "use_epoll = is_linux || is_chromeos || is_android\n",
+     "use_epoll = is_linux || is_chromeos || is_android || is_haiku\n"),
+
+    # Dice (desktop sign-in consistency). Nothing in content_shell uses it,
+    # but //chrome's pak list reaches //chrome/browser/resources/intro for
+    # every non-Android, non-ChromeOS platform, and that target asserts the
+    # flag. gn loads the labels every loaded BUILD.gn names, so //chrome comes
+    # along (through //tools/perf/chrome_telemetry_build) even with the root
+    # target set to content_shell. Haiku is a desktop platform here, like the
+    # other three.
+    ("components/signin/features.gni",
+     "enable_dice_support = is_linux || is_mac || is_win || is_fuchsia\n",
+     "enable_dice_support =\n"
+     "    is_linux || is_mac || is_win || is_fuchsia || is_haiku\n"),
+
+    # Screen AI. //chrome/utility names //services/screen_ai, which asserts
+    # the flag, so the platform list has to include Haiku for the same reason
+    # dice does. The service itself is never built here.
+    ("services/screen_ai/buildflags/features.gni",
+     "  enable_screen_ai_service = is_linux || is_mac || is_chromeos || is_win\n",
+     "  enable_screen_ai_service =\n"
+     "      is_linux || is_mac || is_chromeos || is_win || is_haiku\n"),
+
+    # Platform lists in targets //ui/views and //components/tabs pull in.
+    # Each is only an assertion: the code behind it is platform-neutral.
+    ("ui/base/unowned_user_data/BUILD.gn",
+     "    is_win || is_apple || is_linux || is_chromeos || is_android || is_fuchsia)\n",
+     "    is_win || is_apple || is_linux || is_chromeos || is_android ||\n"
+     "    is_fuchsia || is_haiku)\n"),
+
+    # ui/menus keeps its own platform list and //ui/views depends on it, so
+    # with toolkit_views on for Haiku the assertion stops gn gen.
+    ("ui/menus/BUILD.gn",
+     "assert(is_win || is_mac || is_linux || is_chromeos || is_android ||\n"
+     "       is_fuchsia || is_ios)\n",
+     "assert(is_win || is_mac || is_linux || is_chromeos || is_android ||\n"
+     "       is_fuchsia || is_ios || is_haiku)\n"),
 ]
 
 
