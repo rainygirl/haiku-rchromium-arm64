@@ -472,6 +472,23 @@ renamed and `top`, `ps` and the crash reporter showed them all alike. Haiku
 gives a team the id of its main thread, so comparing the thread id against
 `getpid()` is the test that was meant.
 
+## The wake-up socket was never drained (fixed 2026-09-20)
+
+Haiku has no `eventfd`, so the shim uses a UDP socket connected to itself
+(`port/files/base/message_loop/epoll_shim_haiku.h`). A real eventfd is a
+counter: `ScheduleWork()` bumps it, and the single `read()` in
+`MessagePumpEpoll::HandleWakeUp()` empties it, after which the descriptor is
+no longer readable. The socket is a queue instead -- every `ScheduleWork()`
+leaves its own 8-byte datagram -- so one read removed one datagram and any
+backlog kept `poll()` returning immediately. That is what had a renderer
+thread burning a full core with nothing rendering.
+
+The shim's comment said spurious wake-ups were fine, and they are; what is
+not fine is waking until the queue happens to empty. `HandleWakeUp()` now
+drains to EAGAIN on Haiku.
+
+Fixing this did not change the V8 corruption below.
+
 ## x.com and the V8 AstValueFactory corruption (open)
 
 Loading `https://x.com/i/flow/login` crashes the renderer, usually as

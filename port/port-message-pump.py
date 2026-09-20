@@ -32,6 +32,32 @@ H = os.path.join(src, "base/message_loop/message_pump_epoll.h")
 C = os.path.join(src, "base/message_loop/message_pump_epoll.cc")
 
 EDITS = [
+    # Draining the wake-up. A real eventfd is a counter: one read empties it
+    # and the descriptor stops being readable. Haiku has no eventfd, so the
+    # shim uses a UDP socket connected to itself (see
+    # base/message_loop/epoll_shim_haiku.h), where each ScheduleWork() queues
+    # a separate 8-byte datagram and one read removes only one of them. Any
+    # backlog therefore left the descriptor readable, poll() returned at once,
+    # and the pump spun -- which is what had the renderer thread burning a
+    # whole core with nothing rendering. Drain to EAGAIN to get the counter
+    # semantics the caller assumes.
+    ("base/message_loop/message_pump_epoll.cc",
+     "  uint64_t value;\n"
+     "  ssize_t n = HANDLE_EINTR(read(wake_event_.get(), &value, "
+     "sizeof(value)));\n"
+     "  DPCHECK(n == sizeof(value));\n",
+     "  uint64_t value;\n"
+     "  ssize_t n = HANDLE_EINTR(read(wake_event_.get(), &value, "
+     "sizeof(value)));\n"
+     "  DPCHECK(n == sizeof(value));\n"
+     "#if defined(__HAIKU__)\n"
+     "  // One datagram per ScheduleWork(), so keep reading until the socket\n"
+     "  // is empty; otherwise the next poll() returns immediately forever.\n"
+     "  while (HANDLE_EINTR(read(wake_event_.get(), &value, sizeof(value))) >\n"
+     "         0) {\n"
+     "  }\n"
+     "#endif\n"),
+
     # With the epoll path compiled out, the buffer it reads into is unused,
     # and Chromium builds with -Werror.
     ("base/message_loop/message_pump_epoll.cc",
