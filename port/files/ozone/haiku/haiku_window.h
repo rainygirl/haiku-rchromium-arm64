@@ -10,7 +10,10 @@
 #include <string>
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/synchronization/lock.h"
+#include "base/thread_annotations.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "ui/events/event.h"
@@ -26,6 +29,46 @@ class BBitmap;
 namespace ui {
 
 class HaikuWindowManager;
+
+// What the compositor thread is allowed to hold on to.
+//
+// Presenting a frame crosses threads by design: viz composites in software on
+// its own thread and hands the finished bitmap straight to the BWindow, whose
+// PresentBitmap() takes the looper lock and is safe from anywhere. What was
+// not safe was the handle. The surface held a base::WeakPtr<HaikuWindow>, and
+// a WeakPtr belongs to the sequence that made it -- the UI thread -- so every
+// frame dereferenced it from the wrong one. The dcheck_always_on build of
+// 2026-09-20 stopped on the first frame with "base/sequence_checker.cc:21
+// DCHECK failed: checker.CalledOnValidSequence" underneath
+// HaikuCanvasSurface::PresentCanvas(), and in a release build the same code
+// read HaikuWindow::window_ with no synchronisation at all while the UI
+// thread could be in DestroyWindow().
+//
+// This is the handle instead: reference counted so the compositor cannot
+// outlive it, and holding the one pointer it needs under a lock the UI thread
+// takes once, in Detach(), before the window goes away.
+class HaikuPresentTarget : public base::RefCountedThreadSafe<HaikuPresentTarget> {
+ public:
+  explicit HaikuPresentTarget(haiku_shim::NativeWindow* window);
+
+  HaikuPresentTarget(const HaikuPresentTarget&) = delete;
+  HaikuPresentTarget& operator=(const HaikuPresentTarget&) = delete;
+
+  // Any thread. Takes ownership of `bitmap` whether or not it is drawn, which
+  // is what the shim's PresentBitmap() promises.
+  void Present(BBitmap* bitmap, const gfx::Rect& damage);
+
+  // UI thread, before the BWindow is destroyed. After this every Present()
+  // drops its bitmap instead of touching a dead window.
+  void Detach();
+
+ private:
+  friend class base::RefCountedThreadSafe<HaikuPresentTarget>;
+  ~HaikuPresentTarget();
+
+  base::Lock lock_;
+  raw_ptr<haiku_shim::NativeWindow> window_ GUARDED_BY(lock_);
+};
 
 // A PlatformWindow backed by a real BWindow.
 //
@@ -81,9 +124,11 @@ class HaikuWindow : public PlatformWindow {
 
   gfx::AcceleratedWidget widget() const { return widget_; }
 
-  // Draws `bitmap` into the view. Called from the compositor thread by the
-  // surface; takes the window lock itself.
-  void PresentBitmap(BBitmap* bitmap, const gfx::Rect& damage);
+  // The handle the surface presents through. Safe to call from the
+  // compositor thread; see HaikuPresentTarget above.
+  scoped_refptr<HaikuPresentTarget> present_target() const {
+    return present_target_;
+  }
 
   // Called on the UI thread, posted from the window thread.
   void OnEventFromWindowThread(std::unique_ptr<Event> event);
@@ -128,6 +173,9 @@ class HaikuWindow : public PlatformWindow {
   // Owned by the shim: DestroyWindow() quits the BWindow thread, which
   // deletes both. Raw, and cleared in the destructor.
   raw_ptr<haiku_shim::NativeWindow> window_ = nullptr;
+
+  // Handed to every canvas surface built for this window.
+  scoped_refptr<HaikuPresentTarget> present_target_;
 
   scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner_;
 

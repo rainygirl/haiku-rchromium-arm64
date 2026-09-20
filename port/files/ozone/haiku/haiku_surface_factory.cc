@@ -10,7 +10,7 @@
 #include <memory>
 
 #include "base/compiler_specific.h"
-#include "base/memory/weak_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "skia/ext/legacy_display_globals.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkImageInfo.h"
@@ -33,8 +33,8 @@ namespace {
 // swizzling.
 class HaikuCanvasSurface : public SurfaceOzoneCanvas {
  public:
-  explicit HaikuCanvasSurface(base::WeakPtr<HaikuWindow> window)
-      : window_(std::move(window)) {}
+  explicit HaikuCanvasSurface(scoped_refptr<HaikuPresentTarget> target)
+      : target_(std::move(target)) {}
 
   ~HaikuCanvasSurface() override = default;
 
@@ -52,7 +52,7 @@ class HaikuCanvasSurface : public SurfaceOzoneCanvas {
   }
 
   void PresentCanvas(const gfx::Rect& damage) override {
-    if (!surface_ || !window_) {
+    if (!surface_ || !target_) {
       return;
     }
     SkPixmap pixmap;
@@ -85,8 +85,10 @@ class HaikuCanvasSurface : public SurfaceOzoneCanvas {
     }
 
     // The window takes ownership; it holds the bitmap as its front buffer so
-    // that expose events can repaint without a new frame.
-    window_->PresentBitmap(bitmap.release(), damage);
+    // that expose events can repaint without a new frame. This runs on the
+    // compositor thread, which is why the handle is a HaikuPresentTarget and
+    // not a base::WeakPtr -- see haiku_window.h.
+    target_->Present(bitmap.release(), damage);
   }
 
   std::unique_ptr<gfx::VSyncProvider> CreateVSyncProvider() override {
@@ -94,7 +96,7 @@ class HaikuCanvasSurface : public SurfaceOzoneCanvas {
   }
 
  private:
-  base::WeakPtr<HaikuWindow> window_;
+  scoped_refptr<HaikuPresentTarget> target_;
   sk_sp<SkSurface> surface_;
   gfx::Size size_;
 };
@@ -132,7 +134,7 @@ std::unique_ptr<SurfaceOzoneCanvas> HaikuSurfaceFactory::CreateCanvasForWidget(
   if (!window) {
     return nullptr;
   }
-  return std::make_unique<HaikuCanvasSurface>(window->GetWeakPtr());
+  return std::make_unique<HaikuCanvasSurface>(window->present_target());
 }
 
 }  // namespace ui

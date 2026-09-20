@@ -4,7 +4,8 @@
 
 #include "ui/ozone/platform/haiku/haiku_window_manager.h"
 
-#include "base/check.h"
+#include "base/check_op.h"
+#include "base/synchronization/lock.h"
 #include "ui/ozone/platform/haiku/haiku_window.h"
 
 namespace ui {
@@ -14,32 +15,36 @@ HaikuWindowManager::HaikuWindowManager() = default;
 HaikuWindowManager::~HaikuWindowManager() = default;
 
 gfx::AcceleratedWidget HaikuWindowManager::AddWindow(HaikuWindow* window) {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  return static_cast<gfx::AcceleratedWidget>(windows_.Add(window));
+  base::AutoLock guard(lock_);
+  const int32_t id = next_id_++;
+  windows_[id] = window;
+  return static_cast<gfx::AcceleratedWidget>(id);
 }
 
 void HaikuWindowManager::RemoveWindow(gfx::AcceleratedWidget widget,
                                       HaikuWindow* window) {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  DCHECK_EQ(window, windows_.Lookup(static_cast<int32_t>(widget)));
-  windows_.Remove(static_cast<int32_t>(widget));
+  base::AutoLock guard(lock_);
+  auto it = windows_.find(static_cast<int32_t>(widget));
+  DCHECK(it != windows_.end());
+  DCHECK_EQ(window, it->second);
+  windows_.erase(it);
 }
 
 HaikuWindow* HaikuWindowManager::GetWindow(gfx::AcceleratedWidget widget) {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  return windows_.Lookup(static_cast<int32_t>(widget));
+  base::AutoLock guard(lock_);
+  auto it = windows_.find(static_cast<int32_t>(widget));
+  return it == windows_.end() ? nullptr : it->second;
 }
 
 gfx::AcceleratedWidget HaikuWindowManager::GetAcceleratedWidgetAtScreenPoint(
     const gfx::Point& point) {
-  DCHECK(thread_checker_.CalledOnValidThread());
-  // Topmost wins, and IDMap iterates oldest first, so keep the last match
-  // rather than returning on the first one.
+  base::AutoLock guard(lock_);
+  // Topmost wins, and the map iterates in id order, which is creation order,
+  // so keep the last match rather than returning on the first one.
   gfx::AcceleratedWidget found = gfx::kNullAcceleratedWidget;
-  for (base::IDMap<HaikuWindow*>::iterator it(&windows_); !it.IsAtEnd();
-       it.Advance()) {
-    if (it.GetCurrentValue()->GetBoundsInPixels().Contains(point)) {
-      found = static_cast<gfx::AcceleratedWidget>(it.GetCurrentKey());
+  for (const auto& entry : windows_) {
+    if (entry.second->GetBoundsInPixels().Contains(point)) {
+      found = static_cast<gfx::AcceleratedWidget>(entry.first);
     }
   }
   return found;

@@ -23,6 +23,7 @@
 #include "ui/ozone/platform/haiku/haiku_beapi.h"
 #include "ui/ozone/platform/haiku/haiku_shim.h"
 #include "ui/ozone/platform/haiku/haiku_toolbar_bridge.h"
+#include "base/synchronization/lock.h"
 #include "ui/ozone/platform/haiku/haiku_window_manager.h"
 
 namespace ui {
@@ -37,6 +38,29 @@ std::map<gfx::AcceleratedWidget, HaikuWindow*>& ToolbarWindowMap() {
 }
 
 }  // namespace
+
+HaikuPresentTarget::HaikuPresentTarget(haiku_shim::NativeWindow* window)
+    : window_(window) {}
+
+HaikuPresentTarget::~HaikuPresentTarget() = default;
+
+void HaikuPresentTarget::Present(BBitmap* bitmap, const gfx::Rect& damage) {
+  base::AutoLock guard(lock_);
+  if (!window_) {
+    delete bitmap;
+    return;
+  }
+  // The view owns the front buffer and repaints from it, so hand the new one
+  // over and drop the old. PresentBitmap() locks the looper, so holding
+  // `lock_` across it only orders us against Detach().
+  window_->PresentBitmap(bitmap, damage.x(), damage.y(), damage.width(),
+                         damage.height());
+}
+
+void HaikuPresentTarget::Detach() {
+  base::AutoLock guard(lock_);
+  window_ = nullptr;
+}
 
 HaikuWindow::HaikuWindow(PlatformWindowDelegate* delegate,
                          HaikuWindowManager* manager,
@@ -53,6 +77,7 @@ HaikuWindow::HaikuWindow(PlatformWindowDelegate* delegate,
   window_ = haiku_shim::HaikuShimCreateWindow(
       bounds.x(), bounds.y(), bounds.width(), bounds.height(), has_frame,
       /*with_toolbar=*/has_frame, bridge_.get());
+  present_target_ = base::MakeRefCounted<HaikuPresentTarget>(window_);
   ToolbarWindowMap()[widget_] = this;
 
   delegate_->OnAcceleratedWidgetAvailable(widget_);
@@ -60,6 +85,10 @@ HaikuWindow::HaikuWindow(PlatformWindowDelegate* delegate,
 
 HaikuWindow::~HaikuWindow() {
   delegate_->OnWillDestroyAcceleratedWidget();
+  if (present_target_) {
+    // Stop the compositor thread reaching the window before it is torn down.
+    present_target_->Detach();
+  }
   if (window_) {
     // Quits the window thread, which deletes the BWindow and its view. No
     // callback can reach the bridge after this returns.
@@ -256,16 +285,6 @@ void HaikuWindow::SetWindowIcons(const gfx::ImageSkia& window_icon,
 
 void HaikuWindow::SizeConstraintsChanged() {}
 
-void HaikuWindow::PresentBitmap(BBitmap* bitmap, const gfx::Rect& damage) {
-  if (!window_) {
-    delete bitmap;
-    return;
-  }
-  // The view owns the front buffer and repaints from it, so hand the new one
-  // over and drop the old.
-  window_->PresentBitmap(bitmap, damage.x(), damage.y(), damage.width(),
-                         damage.height());
-}
 
 void HaikuWindow::OnEventFromWindowThread(std::unique_ptr<Event> event) {
   delegate_->DispatchEvent(event.get());
