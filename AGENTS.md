@@ -545,6 +545,21 @@ Fixing this did not change the V8 corruption below.
 
 ## x.com and the V8 AstValueFactory corruption (open)
 
+**It is not x.com's bug.** Five sites, three runs each, then ten runs of the
+one that mattered:
+
+	https://x.com/i/flow/login   XX.
+	https://x.com/               ..X
+	https://ko.wikipedia.org/    .X.      and 2 of 10 on a rerun
+	https://news.naver.com/      ...
+	https://www.google.com/      ...
+
+A plain Wikipedia article takes the same `Check failed` about one run in five.
+x.com is the reliable reproducer, not the cause, and the section title and
+everything below it are narrower than the problem. Whatever this is, it wants
+a page with real JavaScript and a few seconds of work, not anything x.com does
+in particular.
+
 Loading `https://x.com/i/flow/login` crashes the renderer, usually as
 `Check failed: std::numeric_limits<int>::max() >= length_.` in
 `v8::base::Vector::length()`, sometimes as a SIGSEGV. Both land in
