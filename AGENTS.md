@@ -588,15 +588,62 @@ wake-up would let work run out of order. A build with `dcheck_always_on=true`
 is the other obvious move: V8's zone and parser carry thread-affinity DCHECKs
 that would name the violation outright.
 
-**Where this was left (2026-09-20).** A `dcheck_always_on=true` build was
-started and not finished -- 65181 steps, several hours. That is the next move:
-V8's zone and parser carry thread-affinity DCHECKs that would name the
-violation at the moment it happens, instead of leaving the corrupted result to
-be reverse-engineered afterwards, which is what every diagnostic so far has
-had to do. `out/haiku-arm64/args.gn` currently has DCHECKs on; the previous
-args are saved in the container at `/root/args.nodcheck.bak`. Expect build
-errors from Haiku-guarded debug code that has never been compiled with
-DCHECKs enabled.
+### What the dcheck_always_on build said (2026-09-20)
+
+The build finished, and it never got as far as V8. Three of this port's own
+defects fired first, and two of them are the kind of thing the V8 corruption
+has looked like all along -- an unsynchronised cross-thread access that a
+release build says nothing about.
+
+Three build fixes were needed before it would compile and start:
+
+1. `base/message_loop/message_pump_epoll.cc` -- upstream's epoll_ctl debug
+   history (`TODO(361611793)`) is DCHECK-only and reads the `epoll_event`
+   handed to `epoll_ctl`. Haiku has neither. `port-message-pump.py` guards the
+   three sites.
+2. `gpu/config/gpu_control_list.cc` -- `GetOsType()` returned `kOsAny`, which
+   in a release build silently makes every software-rendering and driver-bug
+   entry match nothing, and with DCHECKs on is fatal on the first GPU-info
+   lookup. `port-gpu.py` puts Haiku with Linux.
+3. `ui/ozone/platform/haiku/haiku_window_manager.cc:29` --
+   `DCHECK failed: thread_checker_.CalledOnValidThread()`. **A real bug.** viz
+   calls `CreateCanvasForWidget()`, and so `GetWindow()`, on the compositor
+   thread while windows are added and removed on the UI thread. The class
+   asserted the opposite and held a `base::IDMap`, which is a hash map with no
+   synchronisation at all. Note that locking `IDMap` is not the fix: it
+   carries its own `SEQUENCE_CHECKER` on every method and means the same
+   single-sequence promise. It is now a `std::map` under a `base::Lock`.
+
+Then, on the first composited frame:
+
+	FATAL:base/sequence_checker.cc:21 DCHECK failed:
+	checker.CalledOnValidSequence(&bound_at)
+
+	viz::DelayBasedTimeSource::OnTimerTick
+	  viz::DisplayScheduler::OnBeginFrame ... viz::Display::DrawAndSwap
+	  viz::SoftwareRenderer::FinishDrawingFrame
+	  ui::HaikuCanvasSurface::PresentCanvas       <- haiku_surface_factory.cc
+	  base::internal::WeakReference::IsValid
+
+**The second real bug.** The canvas surface held a
+`base::WeakPtr<HaikuWindow>` and dereferenced it every frame from the
+compositor thread; a WeakPtr belongs to the sequence that created it, which is
+the UI thread. In a release build that check is gone and what is left is an
+unsynchronised read of `HaikuWindow::window_` racing the UI thread's
+`DestroyWindow()`. The shim's own `PresentBitmap()` locks the looper and is
+safe from anywhere, so the handle was the only unsafe part: it is now
+`HaikuPresentTarget`, ref-counted, one pointer under a lock, cleared by the UI
+thread in `Detach()`.
+
+**With those three fixed, x.com no longer crashes.** The DCHECK build reaches
+the page, renders its splash, and goes on grinding without a single V8
+complaint -- no `AstRawString::Equal`, no `Vector::length` CHECK, nothing. That
+is not yet proof: a DCHECK build changes timing everywhere, and this bug has
+disappeared under lighter changes than that. The decisive run is the same two
+fixes in a release build, which is what to look at next. `/root/args.dcheck.bak`
+and `/root/args.nodcheck.bak` in the container hold the two arg sets, and the
+DCHECK binary is kept at `/root/dcheck-build/` so it does not have to be built
+again.
 
 Note also that the x86 port fails differently on the same page -- V8's
 embedded builtin code reads as zeros there -- so do not assume one fix covers
