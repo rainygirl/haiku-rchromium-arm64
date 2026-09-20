@@ -419,6 +419,30 @@ download from a host `http.server` at `http://10.0.2.2:<port>/`.
 
 ## Driving the VM, and the tools that are missing inside it
 
+**Where any of this lives.** None of it is in this repository, and the
+directory is misnamed, which costs a session its first twenty minutes every
+time. On `rainygirl@MacMiniM4`:
+
+- `~/rtwitter-test/` -- despite the name, the arm64 Chromium VM workspace.
+  `renku.image` (the Haiku arm64 guest), `xfer.img` (the FAT32 transfer disk
+  the guest mounts from `/dev/disk/scsi/0/0/0/raw`), `cs/` (content_shell and
+  its resources, staged for transfer), `buildall.sh`, `shot.py`, and the
+  `diagNN.py` series -- each of which is one diagnostic edit to the Chromium
+  tree, numbered in the order they were tried.
+- `shot.py <sock> move|click|key|text|shot|drag` is the QMP driver. The
+  running VM's socket is `/tmp/rtw.qmp`. Its shebang points at
+  `~/Workspace/github/rreader/rreader-python/venv/bin/python3`, which is where
+  PIL is; `SHOTDIR` chooses where screenshots land.
+- The build is the `haiku-chromium` Docker container (`docker` is at
+  `/usr/local/bin/docker` and is not on a non-interactive ssh `PATH`). The
+  checkout is `/work/chromium/src`, the output `out/haiku-arm64`.
+- The guest's `hostfwd` on 127.0.0.1:2231 goes to its port 22, but nothing
+  listens there unless sshd has been started inside the guest, so the transfer
+  disk is still the way in.
+- Before trusting a build, check that the `diagNN.py` edits have been backed
+  out: `grep -c Haiku v8/src/ast/ast-value-factory.{cc,h}
+  v8/src/zone/accounting-allocator.cc` should print zeros.
+
 Most of the time spent on the bugs below went into watching the guest, not
 into the bugs. What works:
 
