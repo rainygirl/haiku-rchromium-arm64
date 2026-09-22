@@ -720,6 +720,82 @@ settle whether this is the port at all, but that build is blocked: Chromium's
 Rust host build tools are x86_64 and fail under this aarch64 container, and
 `enable_rust=false` breaks content_shell's mojom rust target.
 
+### The allocator under V8 is PartitionAlloc, and nothing has ever tested it (2026-09-22)
+
+Every native test written against this crash -- 45 million concurrent
+allocations with no overlap, the mmap reservation test, `ordertest.c` -- was
+built with `aarch64-unknown-haiku-gcc` and linked against libroot. So all of
+them exercised **Haiku's allocator**. The browser does not use it:
+
+	out/haiku-arm64/gen/.../partition_alloc/buildflags.h
+	  PA_BUILDFLAG_INTERNAL_USE_PARTITION_ALLOC_AS_MALLOC()  1
+	  PA_BUILDFLAG_INTERNAL_USE_ALLOCATOR_SHIM()             1
+	  PA_BUILDFLAG_INTERNAL_USE_RAW_PTR_BACKUP_REF_IMPL()    1
+	  PA_BUILDFLAG_INTERNAL_ENABLE_BACKUP_REF_PTR_SUPPORT()  1
+	  PA_BUILDFLAG_INTERNAL_USE_PARTITION_COOKIE()           0
+
+`malloc` in content_shell is PartitionAlloc, every `raw_ptr<T>` is
+BackupRefPtr, and PartitionAlloc's platform layer is something this port wrote
+(`port-feature-flags.py` patches its separate copy of the platform detection,
+its `sys/syscall.h` include and its POSIX page allocator;
+`stack_trace_haiku.cc` is ours). The one component that has never been tested
+is the one the corruption happens in. That is not a small gap -- it is the
+gap.
+
+Two details make it more than a general suspicion:
+
+- **The map that comes back wrong is malloc memory, not zone memory.**
+  `AstRawStringMap` is
+  `base::TemplateHashMapImpl<..., base::DefaultAllocationPolicy>`
+  (`v8/src/ast/ast-value-factory.h:233`), and `DefaultAllocationPolicy` is
+  plain `malloc`/`free`. So the hash table whose keys stop pointing at live
+  `AstRawString`s lives in PartitionAlloc, while the strings themselves live
+  in a Zone. "A key does not point at a live AstRawString" is a corrupt
+  *pointer in the table*, not an overwritten string -- which fits the table's
+  backing array being damaged far better than it fits the zone being handed
+  out twice, and the zone is exactly what has already been cleared.
+  (`AstValueFactory`'s constructor `memcpy`s that array out of
+  `AstStringConstants::string_table()` on every parse, on every thread --
+  `base/hashmap.h:202`.)
+
+- **BackupRefPtr decides what it owns by testing addresses against
+  PartitionAddressSpace's pools**, which are many-gigabyte PROT_NONE
+  reservations. Whether Haiku's mmap honours a reservation of that size, and
+  whether the pool test then answers correctly, has not been checked. A pool
+  test that answers wrongly has `raw_ptr` writing refcounts into memory
+  PartitionAlloc does not own, which is the shape of the damage.
+
+`ENABLE_BACKUP_REF_PTR_FEATURE_FLAG` is 1, so BRP is runtime-switchable:
+`--disable-features=PartitionAllocBackupRefPtr` needs no rebuild.
+`serve/xbrp.sh` runs it against baseline, ten runs each, interleaved. If that
+separates, the next step is `use_partition_alloc_as_malloc=false`, which the
+port already builds (see the `malloc_dump_provider.cc` note in
+`port-content.py`: that file is compiled only when PartitionAlloc is not the
+malloc, and Haiku's lack of `mallinfo()` is already handled there).
+
+Treat a null result as weak in the other direction: turning BRP off also
+changes slot layout, and this bug has gone away under every layout change
+anyone has tried.
+
+### A local page that parses as hard as x.com does not crash (2026-09-22)
+
+`serve/genjs.py` generates `repro.html`: eight `<script src>` bundles of about
+800 kB each, 1,400 functions per bundle with unique identifiers and unique
+object keys, seven of every eight never called so they are lazily skipped and
+reparsed later, plus a driver that keeps calling `new Function()` and `eval()`
+on source the process has not seen before. Served from the M4 over QEMU's user
+network at `http://10.0.2.2:8000/repro.html`, so the bytes are identical every
+run -- which x.com's are not, and that is why its baseline rate moved from
+10/10 on 09-21 to 3/6 on 09-22 and why no flag can be bisected against it.
+
+First run: **103,840 fresh parses in 50 seconds, no crash.** So raw parser
+volume is not the trigger. What the page stops doing after its first few
+seconds is the thing to look at: `new Function()` and `eval()` parse on the
+main thread, and V8 only streams a script that is still arriving over the
+network. `repro2.html` (`serve/gen2.py`) keeps four `<script src="gN.js?v=K">`
+in flight for the whole run so background streaming parses never stop, which
+is the shape of a real site's bundle load.
+
 ## fd 0 closed under the browser: the intermittent naver crash (fixed 2026-09-15)
 
 Symptom (2026-09-14/15 builds, single-process launcher, heavy pages): a few
