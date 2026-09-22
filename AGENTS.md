@@ -785,8 +785,31 @@ note in `port-content.py`: that file is compiled only when PartitionAlloc is
 not the malloc, and Haiku's missing `mallinfo()` is already handled there.
 `base/allocator/allocator.gni` asserts that BRP cannot be used without
 PartitionAlloc-Everywhere, so `enable_backup_ref_ptr_support = false` goes with
-it; that is one decision, not two variables. Configured as
-`out/haiku-arm64-nopa`, 70,902 edges, started 2026-09-22 14:13.
+it; and the shim then has no dispatch to fall back to -- its non-PA default is
+`allocator_shim_default_dispatch_to_glibc.cc`, which calls `__libc_malloc`,
+and Haiku's libroot has no such symbol -- so `use_allocator_shim = false` goes
+with it too. All three are one decision: do not use PartitionAlloc.
+`out/haiku-arm64-nopa`, 40,030 edges after the first attempt failed at the
+link on exactly that missing dispatch.
+
+Both binaries went onto the transfer disk at once (`serve/reload-xfer-nopa.sh`
+grows it from 700 MB to 1.4 GB), so the arms could be interleaved in one boot.
+`serve/xpa.sh`, ten runs each against `repro2.html`:
+
+	partitionalloc  .....X....   1 of 10
+	libroot         ..........   0 of 10
+
+**PartitionAlloc is not it** (17), and the one crash was the same
+`Check failed: std::numeric_limits<int>::max() >= length_` as ever, followed
+by `Received signal 30 BUS_ADRALN 0x0`.
+
+But read that table for what it really shows, which is not the allocator. The
+**baseline moved from 4 of 10 to 1 of 10** between two runs of the same binary
+on the same page, and the only thing that changed in between was that the VM
+had been rebooted. So the crash rate depends on how long the machine has been
+up, and a 1-in-10 baseline has almost no power to separate anything -- a 0 of
+10 against it is worth very little. Any arm measured against a fresh boot needs
+a heavier page, or a longer run, or both.
 
 ### A local page that parses as hard as x.com does not crash (2026-09-22)
 
