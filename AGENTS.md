@@ -765,17 +765,28 @@ Two details make it more than a general suspicion:
   test that answers wrongly has `raw_ptr` writing refcounts into memory
   PartitionAlloc does not own, which is the shape of the damage.
 
-`ENABLE_BACKUP_REF_PTR_FEATURE_FLAG` is 1, so BRP is runtime-switchable:
-`--disable-features=PartitionAllocBackupRefPtr` needs no rebuild.
-`serve/xbrp.sh` runs it against baseline, ten runs each, interleaved. If that
-separates, the next step is `use_partition_alloc_as_malloc=false`, which the
-port already builds (see the `malloc_dump_provider.cc` note in
-`port-content.py`: that file is compiled only when PartitionAlloc is not the
-malloc, and Haiku's lack of `mallinfo()` is already handled there).
+`ENABLE_BACKUP_REF_PTR_FEATURE_FLAG` is 1, so BRP is runtime-switchable.
+Ten runs each against `repro2.html`, interleaved (`serve/xr2brp.sh`):
 
-Treat a null result as weak in the other direction: turning BRP off also
-changes slot layout, and this bug has gone away under every layout change
-anyone has tried.
+	baseline  XX.X.X....   4 of 10 crashed
+	no-brp    .X....XXX.   4 of 10 crashed
+
+**BackupRefPtr is not it** (16). Identical rates, and turning BRP off changes
+slot layout, which is the one kind of change this bug has always been
+sensitive to -- so this is a null result that would have been hard to get by
+accident.
+
+That does not clear PartitionAlloc. BRP is the pointer-authentication layer on
+top of it; the thread cache, the slot spans and the freelist encoding are
+untouched by that flag and untested by anything. The test that does clear it
+is `use_partition_alloc_as_malloc=false`, which swaps the whole allocator for
+Haiku's, and which the port already builds -- see the `malloc_dump_provider.cc`
+note in `port-content.py`: that file is compiled only when PartitionAlloc is
+not the malloc, and Haiku's missing `mallinfo()` is already handled there.
+`base/allocator/allocator.gni` asserts that BRP cannot be used without
+PartitionAlloc-Everywhere, so `enable_backup_ref_ptr_support = false` goes with
+it; that is one decision, not two variables. Configured as
+`out/haiku-arm64-nopa`, 70,902 edges, started 2026-09-22 14:13.
 
 ### A local page that parses as hard as x.com does not crash (2026-09-22)
 
@@ -800,6 +811,12 @@ Ten runs of each, interleaved (`serve/xrep.sh`, 60 s limit):
 
 	local  ....X..XX.    3 of 10 crashed
 	x.com  .XXXXX.X.X    7 of 10 crashed
+
+`repro2.html`, which keeps four `<script src="gN.js?v=K">` in flight for the
+whole run so background streaming parses never stop, came out at **4 of 10**
+in the run below. So the thing repro.html stopped doing after its first few
+seconds was not the missing ingredient either; a local page sits at three or
+four in ten whatever it parses and however.
 
 **A page served from this machine does reproduce it.** That is the first time
 this crash has been seen on anything whose bytes are known and repeatable, and
