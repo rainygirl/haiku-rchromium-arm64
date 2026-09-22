@@ -796,6 +796,24 @@ network. `repro2.html` (`serve/gen2.py`) keeps four `<script src="gN.js?v=K">`
 in flight for the whole run so background streaming parses never stop, which
 is the shape of a real site's bundle load.
 
+Ten runs of each, interleaved (`serve/xrep.sh`, 60 s limit):
+
+	local  ....X..XX.    3 of 10 crashed
+	x.com  .XXXXX.X.X    7 of 10 crashed
+
+**A page served from this machine does reproduce it.** That is the first time
+this crash has been seen on anything whose bytes are known and repeatable, and
+it retires the reason no flag could be bisected: x.com's rate moved from 10/10
+to 3/6 to 7/10 across three days because the site does not serve the same
+bundles twice, and nothing can be measured against a control that moves.
+
+Two cautions. 3 of 10 against 7 of 10 does not separate (Fisher p is about
+0.18), so this says the local page crashes, not that it crashes less. And 3 in
+10 is a weak control in its own right -- an arm that comes out 0 of 10 against
+it proves much less than one that comes out 0 of 10 against a 10 of 10
+baseline. Strengthening the reproducer comes before using it, which is what
+`repro2.html` is for.
+
 ## fd 0 closed under the browser: the intermittent naver crash (fixed 2026-09-15)
 
 Symptom (2026-09-14/15 builds, single-process launcher, heavy pages): a few
