@@ -830,6 +830,40 @@ and `dcheck_always_on`, only moved the rate around. The crashes are the usual
 `Check failed: std::numeric_limits<int>::max() >= length_`, sometimes followed
 by `Received signal 30 BUS_ADRALN 0x0`.
 
+The build without it is a working browser, not merely a surviving one: x.com's
+login card renders complete -- the X mark, the three provider buttons with
+their glyphs, the terms text, the footer links -- and clicking "Email or
+username" and typing `rainygirl` fills the field and turns Continue black.
+
+`port/apply-haiku-port.sh` and `port/iterate.sh` now pass the three flags by
+default. What the port gives up is PartitionAlloc's hardening (BackupRefPtr,
+its guard pages and freelist checks) and its thread cache, so allocation is
+slower and a use-after-free is no longer caught for free. That is the trade,
+and it is worth taking until the actual defect inside PartitionAlloc's Haiku
+platform layer is found.
+
+Where to look for that defect, in the order the evidence supports:
+
+- **`partition_alloc/page_allocator_internals_posix.h`**, which this port
+  already patched once for `sys/syscall.h`. PartitionAlloc reserves its pools
+  as large PROT_NONE mappings and then `mprotect`s pieces of them readable;
+  whether Haiku's mmap honours a reservation of that size, and whether
+  `mprotect` on part of one behaves, has never been checked.
+- **The thread cache.** It is per-thread, it hands out and takes back slots
+  without the central lock, and the crash needs more than one thread and
+  disappears under any change of timing.
+- **`partition_alloc_base/` platform code in general.** The port's own
+  `port-feature-flags.py` records that PartitionAlloc keeps a third, separate
+  copy of the platform detection, and that `PA_BUILDFLAG(IS_POSIX)` was 0
+  until it was patched. Anything else that detection got wrong is still
+  wrong.
+
+The cheapest next measurement is `PA_BUILDFLAG(USE_PARTITION_COOKIE)`: build
+with PartitionAlloc **and** cookies on, and see whether PartitionAlloc detects
+the corruption itself and says where. That is a much smaller build than this
+one and it turns "the allocator is at fault" into "the allocator says this
+slot was overrun/double-freed at this size".
+
 The lesson in the first table is worth as much as the finding in the second: a
 null result measured against a weak control is not a null result. The note
 under it said the control had no power and then drew a conclusion from it
