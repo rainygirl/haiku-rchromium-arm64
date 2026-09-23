@@ -145,10 +145,12 @@ class HaikuWindow : public PlatformWindow {
   void OnToolbarForward();
   void OnToolbarReloadOrStop();
   void OnToolbarNavigateToURL(std::string text);
+  void OnToolbarInstall();
   void SetToolbarAddress(const std::string& url);
   void SetToolbarTitle(const std::string& title);
   void SetToolbarLoading(bool loading);
   void SetToolbarNavigationEnabled(bool back, bool forward);
+  void SetToolbarInstallable(bool installable, const std::string& app_name);
 
   base::WeakPtr<HaikuWindow> GetWeakPtr() {
     return weak_ptr_factory_.GetWeakPtr();

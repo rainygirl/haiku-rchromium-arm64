@@ -295,6 +295,11 @@ void HaikuEventBridge::OnReloadOrStop() {
       FROM_HERE, base::BindOnce(&HaikuWindow::OnToolbarReloadOrStop, window_));
 }
 
+void HaikuEventBridge::OnInstall() {
+  ui_task_runner_->PostTask(
+      FROM_HERE, base::BindOnce(&HaikuWindow::OnToolbarInstall, window_));
+}
+
 void HaikuEventBridge::OnNavigateToURL(const char* utf8) {
   // The pointer is only valid during this call, so copy before posting.
   std::string text(utf8 != nullptr ? utf8 : "");

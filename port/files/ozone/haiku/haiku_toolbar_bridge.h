@@ -5,6 +5,7 @@
 #ifndef UI_OZONE_PLATFORM_HAIKU_HAIKU_TOOLBAR_BRIDGE_H_
 #define UI_OZONE_PLATFORM_HAIKU_HAIKU_TOOLBAR_BRIDGE_H_
 
+#include <cstdint>
 #include <string>
 
 #include "ui/gfx/native_ui_types.h"
@@ -25,6 +26,9 @@ class HaikuToolbarObserver {
   virtual void OnNavigateForward() = 0;
   virtual void OnReloadOrStop() = 0;
   virtual void OnNavigateToURL(const std::string& text) = 0;
+  // The install button, shown only while HaikuToolbarSetInstallable()
+  // says the page carries a usable web app manifest.
+  virtual void OnInstall() = 0;
 
  protected:
   ~HaikuToolbarObserver() = default;
@@ -45,6 +49,20 @@ void HaikuToolbarSetNavigationEnabled(gfx::AcceleratedWidget widget,
                                       bool forward);
 void HaikuToolbarSetTitle(gfx::AcceleratedWidget widget,
                           const std::string& title);
+// Show or hide the install button; `app_name` goes in its tooltip.
+void HaikuToolbarSetInstallable(gfx::AcceleratedWidget widget,
+                                bool installable,
+                                const std::string& app_name);
+
+// Write a file's Haiku icon attributes from a 32-bit ARGB image, so an
+// installed web app's launcher carries the site's icon. `argb` is
+// width*height non-premultiplied 0xAARRGGBB pixels, which is SkColor's
+// layout: content_shell's delegate never names a BeAPI type and the shim
+// never names a Skia one.
+bool HaikuSetFileIcon(const std::string& path,
+                      const uint32_t* argb,
+                      int width,
+                      int height);
 
 // Called by HaikuWindow (on the UI thread) to reach the registered observer.
 // Returns null if none is registered for the widget.

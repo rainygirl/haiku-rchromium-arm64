@@ -15,6 +15,8 @@
 #include "haiku_shim.h"
 
 #include <Application.h>
+#include <Node.h>
+#include <NodeInfo.h>
 #include <Autolock.h>
 #include <Bitmap.h>
 #include <ControlLook.h>
@@ -161,6 +163,7 @@ const uint32 kMsgReloadStop = 'rchR';
 const uint32 kMsgGo = 'rchG';
 const uint32 kMsgAddBookmark = 'rchA';
 const uint32 kMsgOpenBookmarks = 'rchL';
+const uint32 kMsgInstall = 'rchI';
 
 const float kChromeHeight = 30.0f;
 const float kButtonSize = 24.0f;
@@ -170,7 +173,7 @@ const char kChromeViewName[] = "rchromium chrome";
 
 class ChromeButton : public BView {
  public:
-  enum class Glyph { kBack, kForward, kReload, kStop, kStar, kList };
+  enum class Glyph { kBack, kForward, kReload, kStop, kStar, kList, kInstall };
 
   ChromeButton(BRect frame, const char* name, Glyph glyph, uint32 what)
       : BView(frame, name, B_FOLLOW_LEFT | B_FOLLOW_TOP, B_WILL_DRAW),
@@ -223,6 +226,9 @@ class ChromeButton : public BView {
         break;
       case Glyph::kStop:
         DrawStop(rect, base, flags);
+        break;
+      case Glyph::kInstall:
+        DrawInstall(rect, base, flags);
         break;
       case Glyph::kStar:
         DrawStar(rect, base, flags);
@@ -278,6 +284,28 @@ class ChromeButton : public BView {
 
   // Add-bookmark. A five-pointed star, computed rather than drawn from a
   // table so it scales with the button.
+  // Install: an arrow into a tray, the usual "put this on the system" glyph.
+  // Drawn rather than shipped as a bitmap so it follows the control colour
+  // like every other button here.
+  void DrawInstall(BRect rect, const rgb_color& base, uint32 flags) {
+    const float w = rect.Width();
+    const float cx = rect.left + w / 2.0f;
+    const float top = rect.top + w * 0.18f;
+    const float stem_bottom = rect.top + w * 0.55f;
+    const float head = w * 0.17f;
+    const float tray = rect.top + w * 0.78f;
+    const float inset = w * 0.20f;
+
+    SetHighColor(tint_color(base, flags == 0 ? B_DARKEN_4_TINT
+                                             : B_DARKEN_MAX_TINT));
+    SetPenSize(1.6f);
+    StrokeLine(BPoint(cx, top), BPoint(cx, stem_bottom));
+    StrokeLine(BPoint(cx - head, stem_bottom - head), BPoint(cx, stem_bottom));
+    StrokeLine(BPoint(cx + head, stem_bottom - head), BPoint(cx, stem_bottom));
+    StrokeLine(BPoint(rect.left + inset, tray), BPoint(rect.right - inset, tray));
+    SetPenSize(1.0f);
+  }
+
   void DrawStar(BRect rect, const rgb_color& base, uint32 flags) {
     PushState();
     SetHighColor(Ink(base, flags));
@@ -651,6 +679,15 @@ class BrowserChromeView : public BView, public BookmarkOpener {
         AddButton(&x, "reload", ChromeButton::Glyph::kReload, kMsgReloadStop);
     reload_->SetEnabled(true);
 
+    // Hidden until a page says it can be installed. Created here rather than
+    // on demand so Layout() never has to care whether it exists.
+    install_ = new ChromeButton(BRect(0, 0, kButtonSize - 1, kButtonSize - 1),
+                                "install", ChromeButton::Glyph::kInstall,
+                                kMsgInstall);
+    install_->SetEnabled(true);
+    install_->Hide();
+    AddChild(install_);
+
     star_ = new ChromeButton(BRect(0, 0, kButtonSize - 1, kButtonSize - 1),
                              "add bookmark", ChromeButton::Glyph::kStar,
                              kMsgAddBookmark);
@@ -714,6 +751,11 @@ class BrowserChromeView : public BView, public BookmarkOpener {
       case kMsgOpenBookmarks:
         ShowBookmarks();
         return;
+      case kMsgInstall:
+        if (delegate_ != NULL) {
+          delegate_->OnInstall();
+        }
+        return;
       default:
         BView::MessageReceived(message);
     }
@@ -742,6 +784,29 @@ class BrowserChromeView : public BView, public BookmarkOpener {
     forward_->SetEnabled(can_go_forward);
   }
 
+  // Show or hide the install button, then re-lay out: the address field has
+  // to give up or take back the width.
+  void SetInstallable(bool installable, const char* app_name) {
+    const bool showing = !install_->IsHidden();
+    BString tip("Install");
+    if (app_name != NULL && app_name[0] != '\0') {
+      tip << " " << app_name;
+    } else {
+      tip << " this app";
+    }
+    install_->SetToolTip(tip.String());
+    if (installable == showing) {
+      return;
+    }
+    if (installable) {
+      install_->Show();
+    } else {
+      install_->Hide();
+    }
+    Layout(Bounds().Width());
+    Invalidate();
+  }
+
   // BookmarkOpener: on the bookmarks-window looper thread.
   void OpenURL(const std::string& url) override {
     delegate_->OnNavigateToURL(url.c_str());
@@ -761,11 +826,14 @@ class BrowserChromeView : public BView, public BookmarkOpener {
     }
   }
 
+
   void Layout(float width) {
     const float top = (kChromeHeight - kButtonSize) / 2.0f;
-    const float right_block = 2 * (kButtonSize + kPadding);
+    const int right_buttons = install_->IsHidden() ? 2 : 3;
+    const float right_block = right_buttons * (kButtonSize + kPadding);
     bookmarks_->MoveTo(width - kButtonSize - kPadding, top);
     star_->MoveTo(width - 2 * kButtonSize - 2 * kPadding, top);
+    install_->MoveTo(width - 3 * kButtonSize - 3 * kPadding, top);
     const float address_width = width - address_left_ - kPadding - right_block;
     address_->ResizeTo(address_width > 40.0f ? address_width : 40.0f,
                        address_->Bounds().Height());
@@ -792,6 +860,7 @@ class BrowserChromeView : public BView, public BookmarkOpener {
   ChromeButton* back_ = NULL;
   ChromeButton* forward_ = NULL;
   ChromeButton* reload_ = NULL;
+  ChromeButton* install_ = NULL;
   ChromeButton* star_ = NULL;
   ChromeButton* bookmarks_ = NULL;
   BTextControl* address_ = NULL;
@@ -980,6 +1049,14 @@ class ShimWindow : public BWindow, public NativeWindow {
     UnlockLooper();
   }
 
+  void SetInstallable(bool installable, const char* app_name) {
+    if (chrome_ == NULL || !LockLooper()) {
+      return;
+    }
+    chrome_->SetInstallable(installable, app_name);
+    UnlockLooper();
+  }
+
   void DestroyWindow() {
     // Quit() deletes the BWindow, and with it the views and this object.
     if (LockLooper()) {
@@ -1090,6 +1167,95 @@ extern "C" void HaikuShimScreenFrame(float out_xywh[4]) {
   out_xywh[1] = f.top;
   out_xywh[2] = f.Width() + 1;
   out_xywh[3] = f.Height() + 1;
+}
+
+namespace {
+
+// Box-filter a rectangle of the source into one destination pixel. Averaging
+// rather than nearest neighbour because these are large downscales -- a
+// 512x512 manifest icon into 16x16 -- and a nearest neighbour at that ratio
+// keeps one pixel in a thousand and looks like noise.
+unsigned int AverageIconPixels(const unsigned int* argb,
+                               int width,
+                               int height,
+                               int x0,
+                               int y0,
+                               int x1,
+                               int y1) {
+  if (x1 <= x0) x1 = x0 + 1;
+  if (y1 <= y0) y1 = y0 + 1;
+  if (x1 > width) x1 = width;
+  if (y1 > height) y1 = height;
+
+  unsigned int a_sum = 0, r_sum = 0, g_sum = 0, b_sum = 0, n = 0;
+  for (int y = y0; y < y1; ++y) {
+    for (int x = x0; x < x1; ++x) {
+      const unsigned int px = argb[y * width + x];
+      const unsigned int a = (px >> 24) & 0xff;
+      // Weight colour by coverage so a transparent edge does not drag the
+      // average toward whatever colour happens to sit behind it.
+      a_sum += a;
+      r_sum += ((px >> 16) & 0xff) * a;
+      g_sum += ((px >> 8) & 0xff) * a;
+      b_sum += (px & 0xff) * a;
+      ++n;
+    }
+  }
+  if (n == 0 || a_sum == 0) return 0;
+  const unsigned int a = a_sum / n;
+  return (a << 24) | ((r_sum / a_sum) << 16) | ((g_sum / a_sum) << 8) |
+         (b_sum / a_sum);
+}
+
+// B_RGBA32 is byte order B, G, R, A on a little-endian machine, premultiplied.
+bool FillIconBitmap(BBitmap* bitmap,
+                    const unsigned int* argb,
+                    int width,
+                    int height,
+                    int side) {
+  uint8* bits = static_cast<uint8*>(bitmap->Bits());
+  if (bits == NULL) return false;
+  const int32 row_bytes = bitmap->BytesPerRow();
+  for (int y = 0; y < side; ++y) {
+    uint8* row = bits + y * row_bytes;
+    for (int x = 0; x < side; ++x) {
+      const unsigned int px =
+          AverageIconPixels(argb, width, height, x * width / side,
+                            y * height / side, (x + 1) * width / side,
+                            (y + 1) * height / side);
+      const unsigned int a = (px >> 24) & 0xff;
+      row[x * 4 + 0] = static_cast<uint8>(((px & 0xff) * a) / 255);
+      row[x * 4 + 1] = static_cast<uint8>((((px >> 8) & 0xff) * a) / 255);
+      row[x * 4 + 2] = static_cast<uint8>((((px >> 16) & 0xff) * a) / 255);
+      row[x * 4 + 3] = static_cast<uint8>(a);
+    }
+  }
+  return true;
+}
+
+}  // namespace
+
+bool HaikuShimSetFileIcon(const char* path,
+                          const unsigned int* argb,
+                          int width,
+                          int height) {
+  if (path == NULL || argb == NULL || width <= 0 || height <= 0) return false;
+
+  BNode node(path);
+  if (node.InitCheck() != B_OK) return false;
+  BNodeInfo info(&node);
+  if (info.InitCheck() != B_OK) return false;
+
+  bool any = false;
+  const int sides[2] = {32, 16};
+  const icon_size which[2] = {B_LARGE_ICON, B_MINI_ICON};
+  for (int i = 0; i < 2; ++i) {
+    BBitmap bitmap(BRect(0, 0, sides[i] - 1, sides[i] - 1), B_RGBA32);
+    if (bitmap.InitCheck() != B_OK) continue;
+    if (!FillIconBitmap(&bitmap, argb, width, height, sides[i])) continue;
+    if (info.SetIcon(&bitmap, which[i]) == B_OK) any = true;
+  }
+  return any;
 }
 
 }  // namespace haiku_shim

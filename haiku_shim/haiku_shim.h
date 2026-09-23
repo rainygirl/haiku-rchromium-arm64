@@ -65,6 +65,9 @@ class Delegate {
   // loading state last pushed through NativeWindow::SetLoadingState.
   virtual void OnReloadOrStop() {}
   virtual void OnNavigateToURL(const char* utf8) {}
+  // The install button, which only exists while the page has a usable
+  // web app manifest. See HaikuShimWindow::SetInstallable().
+  virtual void OnInstall() {}
 
  protected:
   // Not virtual on purpose: the shim never owns or destroys a delegate.
@@ -100,6 +103,8 @@ class NativeWindow {
   virtual void SetPageTitleText(const char* utf8) = 0;
   virtual void SetLoadingState(bool loading) = 0;
   virtual void SetNavigationEnabled(bool back, bool forward) = 0;
+  // Show or hide the install button. `app_name` is for its tooltip.
+  virtual void SetInstallable(bool installable, const char* app_name) = 0;
 
   // Quits the window thread, which deletes the BWindow and this object with
   // it. No delegate call can arrive after this returns.
@@ -128,6 +133,16 @@ NativeWindow* HaikuShimCreateWindow(float x,
 
 // The main screen's frame, as x, y, width, height.
 void HaikuShimScreenFrame(float out_xywh[4]);
+
+// Write a file's Haiku icon attributes from a 32-bit ARGB image, so an
+// installed web app's launcher carries the site's own icon. `argb` is
+// width*height non-premultiplied 0xAARRGGBB pixels -- SkColor's layout --
+// which is how the caller avoids naming a BeAPI type and this file avoids
+// naming a Skia one. Scaled here to 32x32 and 16x16.
+bool HaikuShimSetFileIcon(const char* path,
+                          const unsigned int* argb,
+                          int width,
+                          int height);
 
 }  // extern "C"
 

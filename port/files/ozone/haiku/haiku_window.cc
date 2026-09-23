@@ -345,6 +345,12 @@ void HaikuWindow::OnToolbarNavigateToURL(std::string text) {
   }
 }
 
+void HaikuWindow::OnToolbarInstall() {
+  if (HaikuToolbarObserver* obs = GetHaikuToolbarObserver(widget_)) {
+    obs->OnInstall();
+  }
+}
+
 void HaikuWindow::SetToolbarAddress(const std::string& url) {
   if (window_) {
     window_->SetAddressText(url.c_str());
@@ -369,6 +375,13 @@ void HaikuWindow::SetToolbarLoading(bool loading) {
 void HaikuWindow::SetToolbarNavigationEnabled(bool back, bool forward) {
   if (window_) {
     window_->SetNavigationEnabled(back, forward);
+  }
+}
+
+void HaikuWindow::SetToolbarInstallable(bool installable,
+                                        const std::string& app_name) {
+  if (window_) {
+    window_->SetInstallable(installable, app_name.c_str());
   }
 }
 
@@ -404,6 +417,24 @@ void HaikuToolbarSetTitle(gfx::AcceleratedWidget widget,
   if (it != ToolbarWindowMap().end()) {
     it->second->SetToolbarTitle(title);
   }
+}
+
+void HaikuToolbarSetInstallable(gfx::AcceleratedWidget widget,
+                                bool installable,
+                                const std::string& app_name) {
+  auto it = ToolbarWindowMap().find(widget);
+  if (it != ToolbarWindowMap().end()) {
+    it->second->SetToolbarInstallable(installable, app_name);
+  }
+}
+
+bool HaikuSetFileIcon(const std::string& path,
+                      const uint32_t* argb,
+                      int width,
+                      int height) {
+  return haiku_shim::HaikuShimSetFileIcon(path.c_str(),
+                              reinterpret_cast<const unsigned int*>(argb),
+                              width, height);
 }
 
 }  // namespace ui
