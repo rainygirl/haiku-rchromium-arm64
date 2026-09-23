@@ -720,7 +720,7 @@ settle whether this is the port at all, but that build is blocked: Chromium's
 Rust host build tools are x86_64 and fail under this aarch64 container, and
 `enable_rust=false` breaks content_shell's mojom rust target.
 
-### The allocator under V8 is PartitionAlloc, and nothing has ever tested it (2026-09-22)
+### The allocator under V8 is PartitionAlloc, and it is the cause (2026-09-22, settled 09-23)
 
 Every native test written against this crash -- 45 million concurrent
 allocations with no overlap, the mmap reservation test, `ordertest.c` -- was
@@ -799,17 +799,25 @@ grows it from 700 MB to 1.4 GB), so the arms could be interleaved in one boot.
 	partitionalloc  .....X....   1 of 10
 	libroot         ..........   0 of 10
 
-**PartitionAlloc is not it** (17), and the one crash was the same
-`Check failed: std::numeric_limits<int>::max() >= length_` as ever, followed
-by `Received signal 30 BUS_ADRALN 0x0`.
+That was read as "PartitionAlloc is not it" and it was wrong. The baseline had
+moved from 4 of 10 to 1 of 10 between two runs of the same binary on the same
+page, with a VM reboot the only thing in between, and a 1-in-10 control cannot
+separate anything from anything. The same table rerun against x.com, which is
+the heavier page, in the same boot, ten runs each interleaved:
 
-But read that table for what it really shows, which is not the allocator. The
-**baseline moved from 4 of 10 to 1 of 10** between two runs of the same binary
-on the same page, and the only thing that changed in between was that the VM
-had been rebooted. So the crash rate depends on how long the machine has been
-up, and a 1-in-10 baseline has almost no power to separate anything -- a 0 of
-10 against it is worth very little. Any arm measured against a fresh boot needs
-a heavier page, or a longer run, or both.
+	partitionalloc  .XXX.XX.XX   7 of 10
+	libroot         ..........   0 of 10
+
+**It is PartitionAlloc.** Fisher's exact test puts that at about p = 0.003,
+and it is the first thing in three weeks that has separated at all -- every
+other arm, including `--single-threaded` and `dcheck_always_on`, only moved
+the rate around.
+
+The lesson in the first table is worth as much as the finding in the second: a
+null result measured against a weak control is not a null result. The note
+under it said the control had no power and then drew a conclusion from it
+anyway. When an arm comes out clean, check what the baseline was doing before
+believing it.
 
 ### A local page that parses as hard as x.com does not crash (2026-09-22)
 
