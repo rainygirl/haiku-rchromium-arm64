@@ -68,5 +68,17 @@ Done. Configure with:
       is_debug=false
       symbol_level=0
       haiku_sysroot="/root/pybuild/sysroot"
+      use_partition_alloc_as_malloc=false
+      enable_backup_ref_ptr_support=false
+      use_allocator_shim=false
   '
+
+The three allocator flags are not optional. With PartitionAlloc as malloc,
+x.com kills the renderer in V8's AstValueFactory about seven runs in ten --
+measured twice, ten runs each, interleaved against a build with these flags in
+the same boot, which came out 0 of 10 both times. See AGENTS.md, "The
+allocator under V8 is PartitionAlloc". They move together: allocator.gni
+asserts BackupRefPtr needs PartitionAlloc-Everywhere, and without
+PartitionAlloc the shim's only non-PA dispatch is the glibc one, which calls
+__libc_malloc and does not link on Haiku.
 USAGE

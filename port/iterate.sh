@@ -11,6 +11,9 @@ timeout 900 ./buildtools/linux64/gn gen out/haiku-arm64 --args="
   symbol_level=0
   target_sysroot=\"/root/pybuild/sysroot\"
   haiku_sysroot=\"/root/pybuild/sysroot\"
+  use_partition_alloc_as_malloc=false
+  enable_backup_ref_ptr_support=false
+  use_allocator_shim=false
 " > /tmp/gna.log 2>&1
 rc=$?
 if [ $rc -eq 0 ]; then echo "GN GEN SUCCEEDED"; exit 0; fi
