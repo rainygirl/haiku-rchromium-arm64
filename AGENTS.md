@@ -818,10 +818,17 @@ the heavier page, in the same boot, ten runs each interleaved:
 	partitionalloc  .XXX.XX.XX   7 of 10
 	libroot         ..........   0 of 10
 
-**It is PartitionAlloc.** Fisher's exact test puts that at about p = 0.003,
-and it is the first thing in three weeks that has separated at all -- every
-other arm, including `--single-threaded` and `dcheck_always_on`, only moved
-the rate around.
+and again, immediately, same boot, same script:
+
+	partitionalloc  X.XXXXXX..   7 of 10
+	libroot         ..........   0 of 10
+
+**It is PartitionAlloc.** Fourteen of twenty against none of twenty, which
+Fisher's exact test puts near 1e-5, and it is the first thing in three weeks
+that has separated at all -- every other arm, including `--single-threaded`
+and `dcheck_always_on`, only moved the rate around. The crashes are the usual
+`Check failed: std::numeric_limits<int>::max() >= length_`, sometimes followed
+by `Received signal 30 BUS_ADRALN 0x0`.
 
 The lesson in the first table is worth as much as the finding in the second: a
 null result measured against a weak control is not a null result. The note
