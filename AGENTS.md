@@ -543,7 +543,15 @@ drains to EAGAIN on Haiku.
 
 Fixing this did not change the V8 corruption below.
 
-## x.com and the V8 AstValueFactory corruption (open)
+## x.com and the V8 AstValueFactory corruption (cause found 2026-09-23)
+
+**It is PartitionAlloc.** Built with `use_partition_alloc_as_malloc = false`
+(plus the two flags that have to move with it), x.com ran 10 of 10 without a
+crash against the shipping binary's 7 of 10, interleaved in one boot. The
+section "The allocator under V8 is PartitionAlloc" below has the measurement
+and how it was nearly missed. Everything between here and there is the three
+weeks of looking in the wrong place, kept because the eliminations are still
+sound and the methodology notes cost more to learn than to write down.
 
 **It is not x.com's bug.** Five sites, three runs each, then ten runs of the
 one that mattered:
@@ -581,7 +589,9 @@ local-dynamic test passes, and the whole PT_TLS segment is 1144 bytes); ICU
 symbol collision (content_shell exports no ICU symbols); `memcpy`/`memmove`
 overrun (48 sizes x 16 alignments, clean); arm64 outline atomics (all 101
 helpers are defined in the binary); the rehash loop walking off the end of the
-old map; the allocator handing out overlapping blocks; a use-after-free of a
+old map; the allocator handing out overlapping blocks
+(**this one was measured against libroot's allocator, not the one the browser
+uses -- see the PartitionAlloc section below**); a use-after-free of a
 released zone segment (checked with a ring of released segments that is
 invalidated when the address is handed out again); use of a destroyed
 `AstValueFactory`; and V8's lazy compile dispatcher
