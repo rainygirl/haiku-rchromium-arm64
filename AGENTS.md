@@ -463,6 +463,54 @@ into the bugs. What works:
   transfer image is, but only after QEMU exits, and the guest's FAT writes do
   not always survive.
 
+## Installing a web app as a Haiku application (2026-09-23)
+
+The toolbar shows an install button on a page with a usable web app manifest,
+and pressing it writes a Haiku application:
+
+	~/config/non-packaged/apps/<Name>/<Name>            the launcher, +x
+	~/config/settings/deskbar/menu/Applications/<Name>  a symlink to it
+
+The launcher is a shell script that runs this same content_shell at the
+manifest's `start_url` with `RCH_NO_TOOLBAR=1`, `RCH_APP_NAME=<Name>` and its
+own `--user-data-dir`. Deskbar does not scan `non-packaged/apps`; it lists the
+symlinks in that menu directory, so both are needed. Deleting them uninstalls.
+
+Chrome's version of this is in `chrome/browser/web_applications`, which
+content_shell does not have and does not need: `ManifestManagerHost` hands
+over the parsed manifest and `WebContents::DownloadImage()` fetches its icons.
+
+**Three layers, not two.** This port's BeAPI lives in a separate shim library,
+so a toolbar button travels:
+
+	haiku_shim.cc  BrowserChromeView -> Delegate::OnInstall()
+	haiku_beapi.cc HaikuEventBridge::OnInstall() -> UI thread
+	haiku_window.cc HaikuWindow::OnToolbarInstall() -> HaikuToolbarObserver
+	shell_platform_delegate_haiku.cc  ShellToolbarObserver::OnInstall()
+
+Adding the button to the shim and the handler to content_shell is not enough.
+`HaikuEventBridge::OnInstall()` is the link, and leaving it out gives a button
+that draws, shows the right tooltip and does nothing -- which is exactly what
+the first build did.
+
+**Trunk is not 87.** `WebContents::GetManifest()` has been removed;
+`ManifestManagerHost::GetOrCreateForPage(contents->GetPrimaryPage())` replaces
+it and answers with a `blink::mojom::ManifestPtr`. Its `icons` are typemapped,
+so they are values inside a mojo pointer: `icon.src`, not `icon->src`. The
+x86 port's version of this file needs both changes to come the other way.
+
+**The installability test** is Chrome's minus the service worker -- a
+manifest, a valid `start_url`, a name, a display mode of
+standalone/fullscreen/minimal-ui, and an icon with purpose any or maskable.
+Chrome wants a fetch handler because an installed app there should work
+offline; here it is a Deskbar entry that opens a URL, and requiring one would
+rule out most of what anyone would install.
+
+Measured on the VM: squoosh.app judged installable, tooltip reads
+"Install Squoosh", the launcher and symlink appear, the 512x512 manifest icon
+is downscaled into the launcher's icon attributes, and Deskbar's Applications
+menu lists Squoosh with the site's own icon.
+
 ## Symbolising a Haiku crash
 
 Haiku executables are ET_DYN, so a runtime address means nothing alone. The
