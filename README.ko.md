@@ -21,7 +21,12 @@ pkgman add-repo https://pkgman.rainygirl.com/arm64-system
 pkgman install rchromium
 ```
 
-그다음 **재부팅**합니다. R Chromium은 RenkuOS nightly arm64 이미지에 아직 없는
+**renku-arm64 패치 세트로 만든 RENKU 이미지**에는 이 수정이 시스템 패키지에 이미
+들어 있으므로(`haiku_rchromium_fixes`를 제공) `arm64-system`은 추가하지 마십시오.
+`pkgman install rchromium`만 하면 되고 재부팅도 필요 없습니다. 그 이미지에
+`arm64-system`을 추가하면 미디어 스택이 없는 시스템 패키지로 바뀝니다.
+
+다른 arm64 시스템에서는 그다음 **재부팅**합니다. R Chromium은 RenkuOS nightly arm64 이미지에 아직 없는
 커널·런타임 로더 수정 두 가지(TLSDESC 로더 패치, `query-valid-pte` 커널 패치)가
 필요합니다. `arm64-system` 저장소가 두 수정을 넣은 `haiku` 시스템 패키지를
 제공하며, `pkgman install rchromium`이 의존성으로 함께 설치합니다. 다음 부팅부터

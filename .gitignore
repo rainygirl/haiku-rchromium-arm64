@@ -7,3 +7,5 @@ out/
 __pycache__/
 *.pyc
 /release/
+# cross-built by pkgman-repo/scripts/cross-arm64.sh libexecinfo
+packaging/libexecinfo/dist/

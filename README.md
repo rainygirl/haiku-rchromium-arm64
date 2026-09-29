@@ -21,7 +21,13 @@ pkgman add-repo https://pkgman.rainygirl.com/arm64-system
 pkgman install rchromium
 ```
 
-Then **reboot**. R Chromium needs two fixes in the kernel and the runtime
+On a **RENKU image built with the renku-arm64 patch set** the system package
+already carries the fixes (it provides `haiku_rchromium_fixes`), so skip
+`arm64-system`: `pkgman install rchromium` is all it takes, with no reboot.
+Adding `arm64-system` there would replace the system package with one that has
+no media stack.
+
+On other arm64 systems, then **reboot**. R Chromium needs two fixes in the kernel and the runtime
 loader that the RenkuOS nightly arm64 image does not carry yet (the TLSDESC
 loader patch and the `query-valid-pte` kernel patch). The `arm64-system`
 repository publishes a `haiku` system package with both; `pkgman install

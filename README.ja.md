@@ -21,7 +21,13 @@ pkgman add-repo https://pkgman.rainygirl.com/arm64-system
 pkgman install rchromium
 ```
 
-その後 **再起動** します。R Chromium には、RenkuOS nightly の arm64 イメージに
+**renku-arm64 のパッチセットで作った RENKU イメージ**では、修正がシステム
+パッケージに入っている(`haiku_rchromium_fixes` を提供)ため、`arm64-system` は
+追加しないでください。`pkgman install rchromium` だけで済み、再起動も不要です。
+そこに `arm64-system` を追加すると、メディアスタックのないシステムパッケージに
+置き換わります。
+
+他の arm64 環境では、その後 **再起動** します。R Chromium には、RenkuOS nightly の arm64 イメージに
 まだ入っていないカーネルとランタイムローダーの修正 2 つ (TLSDESC ローダーパッチと
 `query-valid-pte` カーネルパッチ) が必要です。`arm64-system` リポジトリが両方を
 含む `haiku` システムパッケージを公開しており、`pkgman install rchromium` が
