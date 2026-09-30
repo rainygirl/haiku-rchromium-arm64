@@ -660,6 +660,81 @@ off-the-record context. That is why a page can look signed in after a restart
 with the cookie jar gone, and why "the session survived" is not evidence that
 cookies persist. It was read as such here once, and was wrong.
 
+## The browser went away a minute into x.com, and it was V8 decommitting a page (2026-09-30)
+
+Reported as "R Twitter quits after I sign in". It is not about signing in and
+it is not a crash in the sense Haiku means: `debug_server` logs every team it
+has to kill, and there was nothing in the syslog. What there was, in the
+browser's own stderr, was this:
+
+	#
+	# Fatal error
+	# Check failed: success.
+	#
+	#FailureMessage Object: 0x1d068d68860
+	Received signal 30 BUS_ADRALN 000000000000
+	[haiku] elr=0000012c124deda4 lr=0000012c124d6c78
+
+and an exit status of 158, which is 128 + 30 and so SIGBUS.
+
+Reading it: `elr` is `v8::base::OS::Abort`, whose whole body is `brk #0`
+(Haiku delivers that as SIGBUS/BUS_ADRALN rather than SIGTRAP), and `lr` is
+inside `V8_Fatal`. The `#` banner is V8's own fatal handler, not Chromium's,
+so the message is a V8 `CHECK`, and `CHECK(success)` narrows to a handful of
+sites. The one that matters here is `BoundedPageAllocator::FreePages`:
+
+	success = page_allocator_->DecommitPages(raw_address, size);
+	// Since we require zero-initialized pages, we must fail here if we
+	// cannot decommit the range.
+	CHECK(success);
+
+To pick that site out of the four `bl V8_Fatal` calls in the same object, read
+the second argument each one sets up -- `CHECK(x)` is
+`V8_Fatal("Check failed: %s.", "x")` -- and dump the string it points at. Only
+one says `success`. (The first LOAD segment of this binary has file offset 0
+at vaddr 0, so a rodata address is also a file offset and `dd` will read it.)
+
+**So `OS::DecommitPages` returned false**, which it only does after
+`CHECK_EQ(ENOMEM, errno)`, so the `mmap` failed with ENOMEM:
+
+	mmap(address, size, PROT_NONE, MAP_FIXED | MAP_ANONYMOUS | MAP_PRIVATE, -1, 0)
+
+Two things make that fail on Haiku where it would not on Linux.
+
+- **No MAP_NORESERVE.** Haiku's `sys/mman.h` documents `MAP_NORESERVE` as
+  "don't commit memory", and without it an anonymous mapping is committed
+  whatever its protection -- so decommitting a range asks the kernel to find
+  memory for a range that is about to hold nothing. Under the "low resource
+  memory: note -> warning" the syslog shows around these failures, that is
+  exactly the request that gets refused.
+- **MAP_FIXED over a live range.** On Haiku that means deleting the area under
+  it and creating another, and the new one has to be placed in an address
+  space that a long-running renderer has fragmented. That is the same corner
+  `VMUserAddressSpace::_InsertAreaSlot()` lives in -- see the x86 port's
+  `haiku_kernel_patches/K0003`, which fixed a panic reachable from an ordinary
+  `mmap()` once the address space is fragmented.
+
+The fix (`port/port-v8.py`) does both halves: pass `MAP_NORESERVE` on Haiku,
+and if the mapping still cannot be made, stop trying to make one. The callers
+of `DecommitPages` do not need a new mapping; they need the range to stay
+reserved and to read back as zero. So make it writable, zero it, and take the
+permissions away again. That leaves the pages resident, which is why it is the
+fallback and not the first choice -- and it prints one line to stderr the
+first time it happens, so a log says which half was needed.
+
+**Why it looked like a sign-in bug.** Signing in is when the page does the most
+work, so it is when the allocator is most likely to free a page it must
+zero -- but a logged-out load of `x.com/home` killed it in 14 seconds too. It
+is not deterministic: three instrumented runs on the same profile survived
+before one did not.
+
+**And why the sign-in never stuck.** The cookie store writes to
+`~/config/settings/RTwitter/Network/Cookies` on a timer, so a process that
+dies a minute after the login has never written `auth_token`. Fix the death
+and the session persists on its own; there was never a second bug there. A
+clean run confirms it -- sign in, quit the browser, start it again, and the
+timeline comes straight up.
+
 ### Reading a crash here without symbols
 
 The release binary is stripped to 1,915 dynamic symbols, so nearest-symbol

@@ -96,6 +96,73 @@ EDITS = [
      "#include <sys/syscall.h>\n"
      "#endif\n"),
 
+    # Decommitting a page must not be able to kill the browser.
+    #
+    # BoundedPageAllocator::FreePages does
+    #   success = page_allocator_->DecommitPages(...); CHECK(success);
+    # when the allocator promises zero-initialized pages, so a failure here is
+    # fatal -- V8_Fatal("Check failed: success."), which is how R Twitter kept
+    # going away a minute or two into x.com.
+    #
+    # DecommitPages is an mmap(MAP_FIXED, PROT_NONE) over a live mapping, and
+    # on Haiku that is asking the kernel to delete the area under the range
+    # and build a new one. Two things make it fail where Linux would not:
+    # MAP_NORESERVE is not in the flags, and Haiku commits memory for an
+    # anonymous mapping whatever its protection ("don't commit memory" is
+    # exactly what its MAP_NORESERVE means); and the new area has to be
+    # carved out of an address space that a long-running renderer has
+    # thoroughly fragmented. Either way it comes back ENOMEM.
+    #
+    # So: ask for no commitment, and if the mapping still cannot be made, do
+    # by hand what it was for. The caller does not need a new mapping, it
+    # needs the range to stay reserved and to read back as zero.
+    ("v8/src/base/platform/platform-posix.cc",
+     "  void* ret = mmap(address, size, PROT_NONE,\n"
+     "                   MAP_FIXED | MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);\n"
+     "  if (V8_UNLIKELY(ret == MAP_FAILED)) {\n"
+     "    // Decommitting pages can fail if the limit of VMAs is exceeded.\n"
+     "    CHECK_EQ(ENOMEM, errno);\n"
+     "    return false;\n"
+     "  }\n",
+     "  int decommit_flags = MAP_FIXED | MAP_ANONYMOUS | MAP_PRIVATE;\n"
+     "#ifdef V8_OS_HAIKU\n"
+     "  // The range is about to hold nothing, so do not make the kernel find\n"
+     "  // memory for it. Haiku's MAP_NORESERVE is documented as \"don't commit\n"
+     "  // memory\", which is the whole intent here.\n"
+     "  decommit_flags |= MAP_NORESERVE;\n"
+     "#endif\n"
+     "  void* ret = mmap(address, size, PROT_NONE, decommit_flags, -1, 0);\n"
+     "  if (V8_UNLIKELY(ret == MAP_FAILED)) {\n"
+     "    // Decommitting pages can fail if the limit of VMAs is exceeded.\n"
+     "    CHECK_EQ(ENOMEM, errno);\n"
+     "#ifdef V8_OS_HAIKU\n"
+     "    // Haiku cannot always replace the mapping: MAP_FIXED over a live\n"
+     "    // range means deleting one area and creating another, and in a\n"
+     "    // fragmented address space the new one is what runs out. The\n"
+     "    // callers of this function do not need a new mapping; they need the\n"
+     "    // range to stay reserved and to read back as zero. Do that in\n"
+     "    // place. It leaves the pages resident, which is why it is the\n"
+     "    // fallback and not the first choice -- but a resident page costs\n"
+     "    // less than the CHECK(success) in BoundedPageAllocator::FreePages,\n"
+     "    // which ends the process.\n"
+     "    if (mprotect(address, size, PROT_READ | PROT_WRITE) == 0) {\n"
+     "      memset(address, 0, size);\n"
+     "      // Taking the permissions away again is what the mmap would have\n"
+     "      // done. If Haiku cannot split the area for it, zeroed and\n"
+     "      // writable still satisfies every caller.\n"
+     "      mprotect(address, size, PROT_NONE);\n"
+     "      static bool reported = false;\n"
+     "      if (!reported) {\n"
+     "        reported = true;\n"
+     "        fprintf(stderr, \"[RCH] DecommitPages: mmap came back ENOMEM; \"\n"
+     "                \"zeroing in place instead\\n\");\n"
+     "      }\n"
+     "      return true;\n"
+     "    }\n"
+     "#endif\n"
+     "    return false;\n"
+     "  }\n"),
+
     # Select the platform file. This mirrors the aix branch: the POSIX
     # backtrace implementation plus one OS-specific source.
     ("v8/BUILD.gn",
