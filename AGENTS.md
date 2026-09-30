@@ -728,6 +728,28 @@ zero -- but a logged-out load of `x.com/home` killed it in 14 seconds too. It
 is not deterministic: three instrumented runs on the same profile survived
 before one did not.
 
+**What the fix was measured against, and what that is worth.** Very little, and
+the honest answer is that the rate is too low to A/B in an afternoon:
+
+	rev 10 (before)   logged out, 90 s    5 of 5 alive
+	                  signed in, 150 s    6 of 6 alive
+	                  4 at once, 180 s    4 of 4 alive
+	rev 11 (after)    signed in, 150 s    6 of 6 alive
+
+One death in something like fifteen launches, and the control never crashed,
+so this pair of sixes says "no regression" and nothing else. Do not read it as
+"fixed". The attempt to force the failure by memory pressure did not work
+either: four browsers at once left 2.3 GB free on a 4 GB guest, which is not
+pressure. What the fix rests on is the mechanism -- the process can no longer
+end on this path because the path no longer ends the process -- and the line
+it prints when the fallback runs is how a future log will say whether the
+MAP_NORESERVE half was enough. Neither run above printed it.
+
+A caveat on the fallback's own limits: it returns false, and the `CHECK` fires
+as before, if `mprotect()` also fails. `mprotect()` over a sub-range needs the
+same area split the `mmap` needed, so that is not impossible -- it is only
+less likely, because a split is less than a delete and a create.
+
 **And why the sign-in never stuck.** The cookie store writes to
 `~/config/settings/RTwitter/Network/Cookies` on a timer, so a process that
 dies a minute after the login has never written `auth_token`. Fix the death
