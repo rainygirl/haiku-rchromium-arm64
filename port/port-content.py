@@ -1568,6 +1568,39 @@ EDITS = [
     # every platform in that flag's list the mismatch is invisible; Haiku is
     # not in it (there is no GPU process here), so the forward declaration has
     # to come from somewhere.
+    # WebAuthn off, because there is nothing to authenticate with and the
+    # API does not say so.
+    #
+    # Haiku has no platform authenticator and HidService here is a stub that
+    # enumerates nothing, so there is no way for a credential request to
+    # succeed. What Blink reports, though, is
+    # isConditionalMediationAvailable() == true (while
+    # isUserVerifyingPlatformAuthenticatorAvailable() == false), and
+    # navigator.credentials.get() and create() then neither resolve nor
+    # reject -- they hang. A site that reads the first answer offers a passkey
+    # and leaves the user on a spinner with no way back to its password form;
+    # x.com does exactly that, which is how this was found.
+    #
+    # Removing the feature removes window.PublicKeyCredential, which is the
+    # thing sites feature-detect, so they fall back to passwords. This runs
+    # before the --enable-blink-features handling below it in the same
+    # function, so --enable-blink-features=WebAuth still puts it back for
+    # anyone who wants to test the hang. Undo it when there is a real
+    # authenticator.
+    ("content/child/runtime_features.cc",
+     "  // These checks are custom wrappers around base::FeatureList::IsEnabled\n"
+     "  // They\'re moved here to distinguish them from actual base checks\n",
+     "#if BUILDFLAG(IS_HAIKU)\n"
+     "  // No authenticator exists on this platform, and the API claims one\n"
+     "  // does: sites offer a passkey and then wait for a promise that never\n"
+     "  // settles. Taking the feature away removes window.PublicKeyCredential,\n"
+     "  // which is what they feature-detect.\n"
+     "  WebRuntimeFeatures::EnableFeatureFromString(\"WebAuth\", false);\n"
+     "#endif\n"
+     "\n"
+     "  // These checks are custom wrappers around base::FeatureList::IsEnabled\n"
+     "  // They\'re moved here to distinguish them from actual base checks\n"),
+
     ("content/browser/video_capture_service_impl.cc",
      '#if BUILDFLAG(IS_WIN)\n'
      '#define CREATE_IN_PROCESS_TASK_RUNNER base::ThreadPool::CreateCOMSTATaskRunner\n',

@@ -757,6 +757,46 @@ and the session persists on its own; there was never a second bug there. A
 clean run confirms it -- sign in, quit the browser, start it again, and the
 timeline comes straight up.
 
+## No authenticator, and an API that says otherwise (2026-09-30)
+
+Found while driving x.com's sign-in form, and unrelated to everything above.
+
+	PublicKeyCredential.isConditionalMediationAvailable()          true
+	PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()  false
+	navigator.credentials.get({publicKey})    never resolves, never rejects
+	navigator.credentials.create({publicKey}) never resolves, never rejects
+
+There is nothing here for a credential request to reach: no platform
+authenticator, and `HidService` is the stub added earlier in these notes,
+which enumerates nothing. But the first answer above is what a site asks
+before it offers a passkey, so x.com offers one -- and a handle whose account
+has a passkey lands on "Sign in with passkey" with a spinner that never stops
+and no way back to the password form. The hang is the second half: the request
+is dispatched and nothing ever completes it, so the promise stays pending
+rather than rejecting with NotAllowedError the way a timeout would.
+
+The fix (`port/port-content.py`) turns the feature off in
+`SetCustomizedRuntimeFeaturesFromCombinedArgs()`:
+
+	WebRuntimeFeatures::EnableFeatureFromString("WebAuth", false);
+
+which removes `window.PublicKeyCredential` -- the thing sites feature-detect --
+so they offer passwords instead. That function runs *before* the
+`--enable-blink-features` handling in the same file, so
+`--enable-blink-features=WebAuth` puts it back, which is how to reproduce the
+hang. Verified on the guest with 154.0.8036.0-12:
+
+	default                            PublicKeyCredential = undefined
+	--enable-blink-features=WebAuth    PublicKeyCredential = function
+
+**This is a workaround, not a fix.** The right end state is a WebAuthn
+implementation, or at least a request path that rejects promptly instead of
+hanging. Undo this when there is something to authenticate with.
+
+R Twitter's launcher passes `--disable-blink-features=WebAuth` as well. That
+is deliberate duplication: it has to keep working against an R Chromium older
+than this one.
+
 ### Reading a crash here without symbols
 
 The release binary is stripped to 1,915 dynamic symbols, so nearest-symbol
