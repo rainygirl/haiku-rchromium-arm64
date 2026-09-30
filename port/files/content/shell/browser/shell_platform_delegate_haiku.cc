@@ -13,8 +13,10 @@
 
 #include "content/shell/browser/shell_platform_delegate.h"
 
+#include <algorithm>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "base/functional/bind.h"
 #include "base/location.h"
@@ -422,6 +424,38 @@ class HostResizeObserver : public aura::WindowTreeHostObserver {
   }
 };
 
+// Closes the shells when the BWindow's close box is pressed.
+//
+// ShimWindow::QuitRequested() -> HaikuEventBridge::OnQuitRequested() ->
+// HaikuWindow::OnCloseRequestedFromWindowThread() ->
+// PlatformWindowDelegate::OnCloseRequest() ->
+// WindowTreeHost::OnHostCloseRequested() -> here. Nothing listened at the end
+// of that chain, so the close box did nothing. Every Shell shares the one
+// host, so closing the window closes them all; Shell quits the message loop
+// when the last one goes.
+class HostCloseObserver : public aura::WindowTreeHostObserver {
+ public:
+  void OnHostCloseRequested(aura::WindowTreeHost* host) override {
+    // Not synchronously: Shell::Close() tears down what is iterating this
+    // observer list right now.
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&HostCloseObserver::CloseAllShells));
+  }
+
+ private:
+  static void CloseAllShells() {
+    // Copied: each Close() removes its Shell from Shell::windows().
+    const std::vector<Shell*> shells = Shell::windows();
+    for (Shell* shell : shells) {
+      // A second press before this ran may already have closed some.
+      if (std::ranges::find(Shell::windows(), shell) !=
+          Shell::windows().end()) {
+        shell->Close();
+      }
+    }
+  }
+};
+
 void FocusContentsSoon(base::WeakPtr<WebContents> contents, int attempts_left);
 
 // Focus the page, retrying on later turns of the loop while there is still
@@ -474,12 +508,14 @@ struct ShellPlatformDelegate::ShellData {
 struct ShellPlatformDelegate::PlatformData {
   std::unique_ptr<ShellPlatformDataAura> aura;
   HostResizeObserver resize_observer;
+  HostCloseObserver close_observer;
 };
 
 ShellPlatformDelegate::ShellPlatformDelegate() = default;
 ShellPlatformDelegate::~ShellPlatformDelegate() {
   if (platform_ && platform_->aura) {
     platform_->aura->host()->RemoveObserver(&platform_->resize_observer);
+    platform_->aura->host()->RemoveObserver(&platform_->close_observer);
   }
 }
 
@@ -488,6 +524,7 @@ void ShellPlatformDelegate::Initialize(const gfx::Size& default_window_size) {
   platform_->aura =
       std::make_unique<ShellPlatformDataAura>(default_window_size);
   platform_->aura->host()->AddObserver(&platform_->resize_observer);
+  platform_->aura->host()->AddObserver(&platform_->close_observer);
 }
 
 void ShellPlatformDelegate::CreatePlatformWindow(

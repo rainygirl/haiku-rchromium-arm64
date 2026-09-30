@@ -6,6 +6,7 @@
 
 // BBitmap is deleted here when a frame cannot be handed to the window.
 #include <Bitmap.h>
+#include <stdlib.h>
 
 #include <map>
 #include <memory>
@@ -35,6 +36,15 @@ namespace {
 std::map<gfx::AcceleratedWidget, HaikuWindow*>& ToolbarWindowMap() {
   static base::NoDestructor<std::map<gfx::AcceleratedWidget, HaikuWindow*>> m;
   return *m;
+}
+
+// RCH_APP_NAME is how an installed web app's launcher says what it is called.
+// It wins over whatever the page calls itself: an installed app is one
+// application, and a window that renames itself as the user moves around
+// inside it does not look like one.
+const char* AppName() {
+  const char* name = getenv("RCH_APP_NAME");
+  return (name != nullptr && name[0] != '\0') ? name : nullptr;
 }
 
 }  // namespace
@@ -74,9 +84,15 @@ HaikuWindow::HaikuWindow(PlatformWindowDelegate* delegate,
 
   bridge_ = std::make_unique<HaikuEventBridge>(GetWeakPtr(), ui_task_runner_);
   // A framed top-level window carries the R Chromium native toolbar.
+  // RCH_NO_TOOLBAR=1 is what an installed web app's launcher sets: an app is
+  // a window onto one site and has no address to type.
   window_ = haiku_shim::HaikuShimCreateWindow(
       bounds.x(), bounds.y(), bounds.width(), bounds.height(), has_frame,
-      /*with_toolbar=*/has_frame, bridge_.get());
+      /*with_toolbar=*/has_frame && getenv("RCH_NO_TOOLBAR") == nullptr,
+      bridge_.get());
+  if (const char* app_name = AppName(); window_ && app_name) {
+    window_->SetWindowTitle(app_name);
+  }
   present_target_ = base::MakeRefCounted<HaikuPresentTarget>(window_);
   ToolbarWindowMap()[widget_] = this;
 
@@ -84,7 +100,11 @@ HaikuWindow::HaikuWindow(PlatformWindowDelegate* delegate,
 }
 
 HaikuWindow::~HaikuWindow() {
-  delegate_->OnWillDestroyAcceleratedWidget();
+  // No delegate calls from here: the delegate is the WindowTreeHostPlatform
+  // that is deleting this window, and it destroyed its compositor first.
+  // Calling OnAcceleratedWidgetDestroyed() then made it release the widget
+  // from a compositor that was gone, and every window close ended in a SEGV.
+  // X11 and Wayland do not call it from their destructors either.
   if (present_target_) {
     // Stop the compositor thread reaching the window before it is torn down.
     present_target_->Detach();
@@ -96,7 +116,6 @@ HaikuWindow::~HaikuWindow() {
     window_ = nullptr;
   }
   bridge_.reset();
-  delegate_->OnAcceleratedWidgetDestroyed();
   ToolbarWindowMap().erase(widget_);
   manager_->RemoveWindow(widget_, this);
 }
@@ -155,7 +174,9 @@ gfx::Rect HaikuWindow::GetBoundsInDIP() const {
 
 void HaikuWindow::SetTitle(const std::u16string& title) {
   if (window_) {
-    window_->SetWindowTitle(base::UTF16ToUTF8(title).c_str());
+    const char* app_name = AppName();
+    window_->SetWindowTitle(app_name ? app_name
+                                     : base::UTF16ToUTF8(title).c_str());
   }
 }
 
@@ -362,7 +383,10 @@ void HaikuWindow::SetToolbarTitle(const std::string& title) {
     window_->SetPageTitleText(title.c_str());
     // content_shell's aura path never calls PlatformWindow::SetTitle, so the
     // BWindow tab would read "Chromium" forever; show the page title there.
-    window_->SetWindowTitle(title.empty() ? "R Chromium" : title.c_str());
+    const char* app_name = AppName();
+    window_->SetWindowTitle(app_name        ? app_name
+                            : title.empty() ? "R Chromium"
+                                            : title.c_str());
   }
 }
 

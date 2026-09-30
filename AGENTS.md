@@ -511,6 +511,32 @@ Measured on the VM: squoosh.app judged installable, tooltip reads
 is downscaled into the launcher's icon attributes, and Deskbar's Applications
 menu lists Squoosh with the site's own icon.
 
+## Close box, RCH_NO_TOOLBAR and RCH_APP_NAME (fixed 2026-09-30)
+
+Until this date the arm64 build ignored all three. The installer wrote
+`RCH_NO_TOOLBAR`/`RCH_APP_NAME` into launchers, but nothing read them, and
+`ShimWindow::QuitRequested()` reached `WindowTreeHost::OnHostCloseRequested()`
+with no observer at the end.
+
+- `haiku_window.cc` builds the window without the toolbar when
+  `RCH_NO_TOOLBAR` is set, and `RCH_APP_NAME` wins over the page title.
+- `shell_platform_delegate_haiku.cc` has a `HostCloseObserver` that closes
+  every Shell (they share the one host); Shell quits the loop after the last.
+- Closing then crashed in `Compositor::ReleaseAcceleratedWidget()`:
+  `~HaikuWindow` called `OnAcceleratedWidgetDestroyed()` on a
+  WindowTreeHostPlatform that had already destroyed its compositor. The
+  destructor no longer calls the delegate (X11/Wayland do not either).
+
+Verified on the RENKU VM with rchromium rev 5: R Twitter opens without the
+toolbar, titled "R Twitter"; the close box ends R Twitter and R Chromium
+with exit status 0.
+
+Build trap: run the same `ninja` that last built an output directory. The
+depot_tools one found `out/haiku-arm64-nopa` written by another version,
+printed "build log version is too old; starting over", and rebuilt all
+70,896 edges (about 10 hours at `-j 14`). `locales/en-US.pak` is not a
+content_shell output; the release reuses the one from the previous tarball.
+
 ## Symbolising a Haiku crash
 
 Haiku executables are ET_DYN, so a runtime address means nothing alone. The
