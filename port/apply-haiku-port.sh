@@ -52,6 +52,11 @@ python3 "$HERE/port-content-shell-build.py" "$SRC"
 
 # 5. The toolchain and config files, which have no upstream counterpart to
 #    patch and are simply added.
+# A HidService. Without one, HidManagerImpl's constructor observes a null
+# pointer and the browser dies the moment a page asks for HID -- which x.com's
+# sign-in page does, because a passkey is a HID device.
+python3 "$HERE/port-hid-haiku.py" "$SRC"
+
 for f in $(cd "$HERE/files" && find . -type f); do
 	mkdir -p "$SRC/$(dirname "${f#./}")"
 	cp "$HERE/files/${f#./}" "$SRC/${f#./}"

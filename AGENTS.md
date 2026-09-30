@@ -570,6 +570,68 @@ The RENKU arm64 image has no curl, wget, tar or python, and its bash has no
 why the VM got the build as a package from a local repository
 (`pkgman add-repo http://10.0.2.2:<port>/<dir>`).
 
+## x.com's sign-in killed the browser, and it was WebHID (2026-09-30)
+
+Entering a handle on x.com and pressing Continue ended the process every time,
+in under a second. Not a clean exit -- a SEGV, which is why the window simply
+vanished.
+
+    Received signal 11 SEGV_MAPERR 0000000000000040
+    [haiku] elr=...ccc lr=...808
+    image 0x...+0xad48000 /boot/system/apps/RChromium/content_shell
+
+Deterministic: two runs, different image bases, the same offsets --
+`content_shell+0x5296ccc`, called from `+0x5bed808`. Disassembling those:
+
+    device::DeviceService::BindHidManager(...)
+      bl   device::HidManagerImpl::HidManagerImpl()
+      ldr  x0, [x21, #0x140]                     <- lr points here
+
+    device::HidService::Create()
+      mov  x0, xzr ; ret                         <- nullptr on Haiku
+
+    device::HidManagerImpl::HidManagerImpl()
+      bl   HidService::Create
+      str  x0, [x19, #0x10]                      <- hid_service_ = nullptr
+      ldr  x0, [x19, #0x10]
+      b    device::HidService::AddObserver       <- tail call, x0 = nullptr
+
+    device::HidService::AddObserver(...)
+      add  x0, x0, #0x40                         <- observer_list_
+      b    base::ObserverList<>::AddObserver
+           ldp x10, x8, [x0]                     <- faults at 0x40
+
+`HidService::Create()` returns nullptr for a platform it does not know, and
+`HidManagerImpl`'s constructor follows a `DCHECK(hid_service_)` -- compiled out
+of a release build -- with `Observe()` on that null. x.com asks for the HID
+device list because a passkey is a HID device.
+
+`port/port-hid-haiku.py` and `port/files/services/device/hid/hid_service_haiku.{h,cc}`
+are the fix: the same empty stub Fuchsia uses, plus a Haiku arm in `Create()`.
+The constructor has to call `FirstEnumerationComplete()` or `GetDevices()`
+never answers and a page waiting for the list waits forever.
+
+**`navigator.hid.getDevices()` does not reproduce it.** With no granted
+permissions it answers with an empty list without binding the service, and the
+browser lives -- which is exactly the false negative that sent this
+investigation off course for an hour. Only x.com's Continue binds it.
+
+Rebuilt in `out/haiku-arm64-nopa`: three edges, not a fresh tree. Verified on
+the RENKU VM by driving the page over CDP (`--remote-debugging-address=0.0.0.0`
+plus a QMP `hostfwd_add tcp::9222-:9222`, since the guest has no sshd): the old
+binary died within 1 s of the click, the new one is still running a minute
+later with a password field in the DOM.
+
+### Reading a crash here without symbols
+
+The release binary is stripped to 1,915 dynamic symbols, so nearest-symbol
+lookup is useless -- it reports offsets of 9 MB. What works is
+`llvm-objdump -d --start-address=<elr-imagebase>`: the disassembly carries
+function symbols even when `llvm-symbolizer` has nothing to say. Beware ICF:
+the crash site reads as `ObserverList<RunLoop::NestingObserver>::AddObserver`
+and the HidService::Create call as `xsltStrxfrm`, because identical code was
+folded. Follow the addresses, not the names.
+
 ## Symbolising a Haiku crash
 
 Haiku executables are ET_DYN, so a runtime address means nothing alone. The
