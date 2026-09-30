@@ -68,6 +68,17 @@ class Delegate {
   // The install button.
   virtual void OnInstall() {}
 
+  // The mouse wheel, and two-finger scrolling on a touchpad or through QEMU's
+  // tablet. The BeAPI deltas, untranslated: notches, positive meaning down
+  // (or right), fractional from smooth-scrolling devices. Appended after the
+  // toolbar callbacks and non-pure, so the vtable slots above keep their
+  // places; the shim and Chromium still have to be rebuilt together.
+  virtual void OnMouseWheel(float x,
+                            float y,
+                            unsigned int modifiers,
+                            float delta_x,
+                            float delta_y) {}
+
  protected:
   // Not virtual on purpose: the shim never owns or destroys a delegate.
   ~Delegate() {}

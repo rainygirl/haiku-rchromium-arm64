@@ -207,6 +207,28 @@ void HaikuEventBridge::OnMouseMoved(float x,
                                 std::move(event)));
 }
 
+void HaikuEventBridge::OnMouseWheel(float x,
+                                    float y,
+                                    unsigned int modifiers,
+                                    float delta_x,
+                                    float delta_y) {
+  // Haiku counts notches with positive meaning down/right; Chromium's offset
+  // is in kWheelDelta units per notch with positive meaning up/left.
+  const gfx::Vector2d offset(
+      static_cast<int>(-delta_x * MouseWheelEvent::kWheelDelta),
+      static_cast<int>(-delta_y * MouseWheelEvent::kWheelDelta));
+  if (offset.IsZero()) {
+    return;
+  }
+  const int flags = EventFlagsFromModifiers(modifiers);
+  gfx::Point location(static_cast<int>(x), static_cast<int>(y));
+  auto event = std::make_unique<MouseWheelEvent>(
+      offset, location, location, EventTimeForNow(), flags, EF_NONE);
+  ui_task_runner_->PostTask(
+      FROM_HERE, base::BindOnce(&HaikuWindow::OnEventFromWindowThread, window_,
+                                std::move(event)));
+}
+
 void HaikuEventBridge::OnKey(bool pressed,
                              const char* bytes,
                              int num_bytes,

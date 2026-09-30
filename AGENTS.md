@@ -537,6 +537,39 @@ printed "build log version is too old; starting over", and rebuilt all
 70,896 edges (about 10 hours at `-j 14`). `locales/en-US.pak` is not a
 content_shell output; the release reuses the one from the previous tarball.
 
+## The mouse wheel and two-finger scrolling (fixed 2026-09-30)
+
+Nothing scrolled: not the wheel, not two-finger scrolling from a trackpad
+through QEMU's usb-tablet. There was no path for it at all. Haiku delivers the
+wheel as a `B_MOUSE_WHEEL_CHANGED` message rather than a BView hook, `ShimView`
+had no `MessageReceived()`, and BView's own dropped it; the Delegate had no
+callback to carry it either.
+
+- `haiku_shim.h` (both copies): `Delegate::OnMouseWheel()`, appended after the
+  toolbar callbacks and non-pure, so no existing vtable slot moves. The shim and
+  Chromium must still be rebuilt together.
+- `haiku_shim.cc`: `ShimView::MessageReceived()` reads `be:wheel_delta_x/y`
+  and, since the message carries no position, the pointer from `GetMouse()`.
+- `haiku_beapi.cc`: a `MouseWheelEvent` of `-delta * kWheelDelta` -- Haiku
+  counts notches with positive meaning down/right, Chromium the opposite.
+
+Rebuilt in `haiku-chromium` on the M4 (`out/haiku-arm64-nopa`, the shipping
+directory; the dry run with `third_party/ninja/ninja -n` showed 7 edges, so the
+right ninja), the shim relinked with the flags from "SHIM LOAD FIX". Packaged as
+rchromium 154.0.8036.0-7 and installed on the RENKU VM with `pkgman` from a
+repository served on the Mac; wheel-down and wheel-up both scroll a Wikipedia
+article.
+
+The package was made without a Haiku machine: `package extract` rev 6 with
+the Linux-hosted tool from a Haiku build tree (`vaio-p-builder`), swap
+`content_shell` and the shim, bump `.PackageInfo`, `package create -z zlib -2`.
+BFS attributes survive the round trip (the launcher keeps `BEOS:ICON`).
+
+The RENKU arm64 image has no curl, wget, tar or python, and its bash has no
+`/dev/tcp`; `pkgman` is the one thing in it that fetches over HTTP, which is
+why the VM got the build as a package from a local repository
+(`pkgman add-repo http://10.0.2.2:<port>/<dir>`).
+
 ## Symbolising a Haiku crash
 
 Haiku executables are ET_DYN, so a runtime address means nothing alone. The

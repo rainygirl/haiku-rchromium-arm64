@@ -138,6 +138,26 @@ class ShimView : public BView {
     delegate_->OnMouseMoved(where.x, where.y, modifiers(), buttons, transit);
   }
 
+  // BView has no hook for the wheel; it arrives as a message, and without
+  // this case BView::MessageReceived dropped it, so neither the wheel nor
+  // two-finger scrolling moved the page. The message carries no position,
+  // so the pointer is read here.
+  void MessageReceived(BMessage* message) {
+    if (message->what == B_MOUSE_WHEEL_CHANGED) {
+      float delta_x = 0.0f;
+      float delta_y = 0.0f;
+      message->FindFloat("be:wheel_delta_x", &delta_x);
+      message->FindFloat("be:wheel_delta_y", &delta_y);
+      BPoint where;
+      uint32 buttons = 0;
+      GetMouse(&where, &buttons, false);
+      delegate_->OnMouseWheel(where.x, where.y, modifiers(), delta_x,
+                              delta_y);
+      return;
+    }
+    BView::MessageReceived(message);
+  }
+
   void KeyDown(const char* bytes, int32 numBytes) {
     delegate_->OnKey(true, bytes, numBytes, modifiers());
   }
