@@ -57,6 +57,10 @@ python3 "$HERE/port-content-shell-build.py" "$SRC"
 # sign-in page does, because a passkey is a HID device.
 python3 "$HERE/port-hid-haiku.py" "$SRC"
 
+# Cookies and an HTTP cache on disk. content_shell leaves the network context
+# in memory, so a sign-in lasts exactly as long as the process.
+python3 "$HERE/port-shell-profile.py" "$SRC"
+
 for f in $(cd "$HERE/files" && find . -type f); do
 	mkdir -p "$SRC/$(dirname "${f#./}")"
 	cp "$HERE/files/${f#./}" "$SRC/${f#./}"

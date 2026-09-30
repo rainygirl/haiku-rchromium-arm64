@@ -622,6 +622,35 @@ plus a QMP `hostfwd_add tcp::9222-:9222`, since the guest has no sshd): the old
 binary died within 1 s of the click, the new one is still running a minute
 later with a password field in the DOM.
 
+## The profile was in memory, and the switch had been renamed (2026-09-30)
+
+Two separate things kept R Twitter from having a profile of its own.
+
+**`--data-path` is not the switch any more.** content_shell renamed it:
+
+    87, 114   --data-path       content/shell/browser/shell_browser_context.cc
+    154       --user-data-dir   kContentShellUserDataDir, shell_switches.h:21
+
+Chrome's `--user-data-dir` is a different switch, which is why R Twitter's
+launcher used to carry a comment warning against it -- correct for 114, and
+wrong here. On the guest the effect was plain: `~/config/settings/RTwitter`
+was never created and `~/config/settings/content_shell`, R Chromium's own
+profile, was modified time-first in `ls -t`. The launcher now passes both
+names; each build reads the one it knows.
+
+**And the network context is still in memory.**
+`ConfigureNetworkContextParamsForShell()` sets no `file_paths` and no
+`http_cache_directory`, so there is no cookie file and no disk cache -- the
+same gap the x86 114 port closed. `port/port-shell-profile.py` closes it here.
+One difference from 114: `http_cache_directory` moved out of
+`NetworkContextParams` and into `NetworkContextFilePaths`, which the compiler
+pointed out.
+
+Web storage does land on disk, because this port does not force an
+off-the-record context. That is why a page can look signed in after a restart
+with the cookie jar gone, and why "the session survived" is not evidence that
+cookies persist. It was read as such here once, and was wrong.
+
 ### Reading a crash here without symbols
 
 The release binary is stripped to 1,915 dynamic symbols, so nearest-symbol
