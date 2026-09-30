@@ -646,6 +646,15 @@ One difference from 114: `http_cache_directory` moved out of
 `NetworkContextParams` and into `NetworkContextFilePaths`, which the compiler
 pointed out.
 
+**And one more, which only a persistent store can reach.**
+`enable_encrypted_cookies` defaults to true, and `network_context.cc:3425`
+walks into a `NOTREACHED()` when a persistent store has it set and no
+`cookie_encryption_provider` -- content_shell has no OSCrypt provider to give
+it. Revision 9 of the arm64 package shipped without that line and died at
+startup, before a window; revision 10 sets it false. On Haiku, which has no
+keyring, the cookie file is plain sqlite either way, so nothing is lost but
+the crash.
+
 Web storage does land on disk, because this port does not force an
 off-the-record context. That is why a page can look signed in after a restart
 with the cookie jar gone, and why "the session survived" is not evidence that

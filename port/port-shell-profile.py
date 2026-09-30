@@ -47,6 +47,12 @@ new = ("  context_params->device_bound_sessions_enabled =\n"
        "        base::FilePath(FILE_PATH_LITERAL(\"Cookies\"));\n"
        "    context_params->file_paths->http_server_properties_file_name =\n"
        "        base::FilePath(FILE_PATH_LITERAL(\"Network Persistent State\"));\n"
+       # enable_encrypted_cookies defaults to true, and a persistent cookie
+       # store with it set and no cookie_encryption_provider walks into a
+       # NOTREACHED() in network_context.cc on everything but Android and
+       # iOS -- content_shell has no OSCrypt provider to give it. The store
+       # is a plain sqlite file either way on Haiku, which has no keyring.
+       "    context_params->enable_encrypted_cookies = false;\n"
        "    context_params->restore_old_session_cookies = true;\n"
        "    context_params->persist_session_cookies = true;\n"
        # 114 had http_cache_directory on NetworkContextParams; 154 moved it
