@@ -155,6 +155,21 @@ base::FilePath AppDirFor(const std::string& app_name) {
       .Append(app_name);
 }
 
+// A value as one single-quoted shell word. The app name comes from the
+// site's web app manifest and the start URL is the site's own, and inside
+// double quotes "$(...)" or a stray '"' in either would run as a command
+// whenever the installed app is opened.
+std::string ShellQuote(const std::string& value) {
+  std::string out = "'";
+  for (char c : value) {
+    if (c == '\'')
+      out += "'\\''";
+    else
+      out += c;
+  }
+  return out + "'";
+}
+
 bool WriteLauncher(const base::FilePath& dir,
                    const std::string& app_name,
                    const GURL& start_url,
@@ -170,7 +185,7 @@ bool WriteLauncher(const base::FilePath& dir,
   script += "#\n";
   script += "# Installed by R Chromium from " + start_url.spec() + "\n";
   script += "# Delete this directory to uninstall.\n\n";
-  script += "SHELL_BIN=\"" + shell_path.value() + "\"\n";
+  script += "SHELL_BIN=" + ShellQuote(shell_path.value()) + "\n";
   script += "APPDIR=$(dirname \"$SHELL_BIN\")\n\n";
   script += "LIBRARY_PATH=\"$APPDIR/lib:/boot/system/lib\"\n";
   script += "export LIBRARY_PATH\n\n";
@@ -178,7 +193,7 @@ bool WriteLauncher(const base::FilePath& dir,
   script += "RCH_NO_TOOLBAR=1\n";
   script += "export RCH_NO_TOOLBAR\n\n";
   script += "# The window keeps the app's name rather than following the page.\n";
-  script += "RCH_APP_NAME=\"" + app_name + "\"\n";
+  script += "RCH_APP_NAME=" + ShellQuote(app_name) + "\n";
   script += "export RCH_APP_NAME\n\n";
   script += "exec \"$SHELL_BIN\" \\\n";
   script += "\t--ozone-platform=haiku \\\n";
@@ -187,8 +202,8 @@ bool WriteLauncher(const base::FilePath& dir,
   script += "\t--disable-gpu \\\n";
   script += "\t--in-process-gpu \\\n";
   script += "\t--disable-gpu-compositing \\\n";
-  script += "\t--user-data-dir=\"" + dir.value() + "/profile\" \\\n";
-  script += "\t\"" + start_url.spec() + "\" \"$@\"\n";
+  script += "\t--user-data-dir=" + ShellQuote(dir.value() + "/profile") + " \\\n";
+  script += "\t" + ShellQuote(start_url.spec()) + " \"$@\"\n";
 
   const base::FilePath launcher = dir.Append(app_name);
   if (!base::WriteFile(launcher, script)) {
